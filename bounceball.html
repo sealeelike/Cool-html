@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>弹力带小球动画</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Noto Sans SC', sans-serif;
+            touch-action: none; /* 禁用触摸滚动，以改善拖动体验 */
+        }
+        .control-label {
+            @apply text-sm font-medium text-gray-700;
+        }
+        .control-value {
+            @apply text-sm font-bold text-indigo-600 w-16 text-center;
+        }
+        .control-slider {
+            @apply w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-indigo-600;
+        }
+        .info-panel {
+            @apply bg-white bg-opacity-80 backdrop-blur-sm p-4 rounded-lg shadow-lg;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 flex flex-col items-center justify-center min-h-screen p-4">
+
+    <div class="w-full max-w-4xl mx-auto">
+        <h1 class="text-2xl sm:text-3xl font-bold text-center text-gray-800 mb-4">弹力带小球动画</h1>
+        
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            <!-- Canvas for the animation -->
+            <div class="lg:col-span-2 w-full aspect-square bg-white rounded-xl shadow-lg border border-gray-200">
+                <canvas id="animationCanvas"></canvas>
+            </div>
+
+            <!-- Controls Panel -->
+            <div class="flex flex-col space-y-4">
+                <div class="info-panel">
+                    <h2 class="text-lg font-bold text-gray-800 mb-3 border-b pb-2">操作说明</h2>
+                    <ul class="list-disc list-inside text-sm text-gray-600 space-y-2">
+                        <li><strong class="text-indigo-600">放置小球：</strong>在圆圈内点击以设置小球的初始位置。</li>
+                        <li><strong class="text-indigo-600">设置速度：</strong>在小球上按下鼠标左键并拖动，然后释放以赋予初始速度。</li>
+                        <li><strong class="text-indigo-600">重置动画：</strong>点击下方的“重置”按钮来清空所有状态，重新开始。</li>
+                    </ul>
+                </div>
+
+                <div class="info-panel">
+                    <h2 class="text-lg font-bold text-gray-800 mb-3 border-b pb-2">参数调节</h2>
+                    <div class="space-y-4">
+                        <!-- Wall Restitution Control -->
+                        <div>
+                            <label for="wallRestitution" class="control-label">圈壁弹力系数</label>
+                            <div class="flex items-center space-x-2">
+                                <input type="range" id="wallRestitution" min="0.1" max="1.2" step="0.01" value="1.0" class="control-slider">
+                                <span id="wallRestitutionValue" class="control-value">1.00</span>
+                            </div>
+                        </div>
+
+                        <!-- Spring Constant Control -->
+                        <div>
+                            <label for="springConstant" class="control-label">弹力带拉力系数</label>
+                            <div class="flex items-center space-x-2">
+                                <input type="range" id="springConstant" min="0.0001" max="0.05" step="0.0001" value="0.0001" class="control-slider">
+                                <span id="springConstantValue" class="control-value">0.0001</span>
+                            </div>
+                        </div>
+
+                        <!-- Ball Mass Control -->
+                        <div>
+                            <label for="ballMass" class="control-label">小球质量</label>
+                            <div class="flex items-center space-x-2">
+                                <input type="range" id="ballMass" min="0.5" max="10" step="0.1" value="0.8" class="control-slider">
+                                <span id="ballMassValue" class="control-value">0.8</span>
+                            </div>
+                        </div>
+
+                        <!-- Damping Control -->
+                        <div>
+                            <label for="damping" class="control-label">环境阻力</label>
+                            <div class="flex items-center space-x-2">
+                                <input type="range" id="damping" min="0" max="0.05" step="0.001" value="0.001" class="control-slider">
+                                <span id="dampingValue" class="control-value">0.001</span>
+                            </div>
+                        </div>
+                        
+                        <!-- Max Speed Control -->
+                        <div>
+                            <label for="maxSpeed" class="control-label">速度上限 (终止)</label>
+                            <div class="flex items-center space-x-2">
+                                <input type="range" id="maxSpeed" min="5" max="10000" step="50" value="5000" class="control-slider">
+                                <span id="maxSpeedValue" class="control-value">5000</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Reset Button -->
+                <button id="resetButton" class="w-full bg-indigo-600 text-white font-bold py-3 px-4 rounded-lg hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-all duration-200 shadow-md">
+                    重置
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- Canvas and Context Setup ---
+        const canvas = document.getElementById('animationCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // Get parent container to make canvas responsive
+        const container = canvas.parentElement;
+        let canvasSize = container.clientWidth;
+        canvas.width = canvasSize;
+        canvas.height = canvasSize;
+
+        // --- Global State and Parameters ---
+        let animationFrameId;
+        let stopEffectFrameId;
+        let isRunning = false;
+        let isDragging = false;
+        let stoppedBySpeed = false;
+        
+        // Game objects
+        const containerCircle = {
+            x: canvas.width / 2,
+            y: canvas.height / 2,
+            radius: Math.max(10, canvas.width / 2 - 20)
+        };
+
+        const ball = {
+            x: containerCircle.x,
+            y: containerCircle.y,
+            radius: 12,
+            mass: 0.8,
+            vx: 0,
+            vy: 0
+        };
+        
+        let springs = [];
+        let trajectory = []; // Array to store ball's path
+        let mouse = { x: 0, y: 0 };
+        let hasPlacedBall = false;
+
+        // --- UI Control Elements ---
+        const wallRestitutionSlider = document.getElementById('wallRestitution');
+        const wallRestitutionValue = document.getElementById('wallRestitutionValue');
+        const springConstantSlider = document.getElementById('springConstant');
+        const springConstantValue = document.getElementById('springConstantValue');
+        const ballMassSlider = document.getElementById('ballMass');
+        const ballMassValue = document.getElementById('ballMassValue');
+        const dampingSlider = document.getElementById('damping');
+        const dampingValue = document.getElementById('dampingValue');
+        const maxSpeedSlider = document.getElementById('maxSpeed');
+        const maxSpeedValue = document.getElementById('maxSpeedValue');
+        const resetButton = document.getElementById('resetButton');
+        
+        let wallRestitution = parseFloat(wallRestitutionSlider.value);
+        let springConstant = parseFloat(springConstantSlider.value);
+        let dampingCoefficient = parseFloat(dampingSlider.value);
+        let maxSpeed = parseFloat(maxSpeedSlider.value);
+        ball.mass = parseFloat(ballMassSlider.value);
+
+        // --- Utility Functions ---
+        function getMousePos(evt) {
+            const rect = canvas.getBoundingClientRect();
+            const clientX = evt.clientX || (evt.touches && evt.touches[0].clientX);
+            const clientY = evt.clientY || (evt.touches && evt.touches[0].clientY);
+            if (clientX === undefined || clientY === undefined) return {};
+            return { x: clientX - rect.left, y: clientY - rect.top };
+        }
+
+        function distance(x1, y1, x2, y2) {
+            return Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
+        }
+
+        // --- Drawing Functions ---
+        function drawScaryClown(cx, cy, size) {
+            const faceRadius = size / 2;
+            ctx.beginPath();
+            ctx.arc(cx, cy, faceRadius, 0, Math.PI * 2);
+            ctx.fillStyle = 'white';
+            ctx.fill();
+            ctx.strokeStyle = 'black';
+            ctx.lineWidth = 4;
+            ctx.stroke();
+            const eyeRadius = faceRadius * 0.15;
+            const eyeY = cy - faceRadius * 0.2;
+            const eyeX = faceRadius * 0.35;
+            ctx.beginPath();
+            ctx.arc(cx - eyeX, eyeY, eyeRadius, 0, Math.PI * 2);
+            ctx.fillStyle = 'black';
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(cx + eyeX, eyeY, eyeRadius, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(cx, cy + faceRadius * 0.1, faceRadius * 0.6, 0.2 * Math.PI, 0.8 * Math.PI);
+            ctx.strokeStyle = 'red';
+            ctx.lineWidth = size * 0.05;
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(cx - eyeX - eyeRadius, eyeY - eyeRadius * 1.5);
+            ctx.lineTo(cx - eyeX + eyeRadius, eyeY - eyeRadius * 2);
+            ctx.moveTo(cx + eyeX + eyeRadius, eyeY - eyeRadius * 1.5);
+            ctx.lineTo(cx + eyeX - eyeRadius, eyeY - eyeRadius * 2);
+            ctx.lineWidth = size * 0.04;
+            ctx.stroke();
+        }
+
+        // --- Core Logic ---
+        function reset() {
+            if (animationFrameId) cancelAnimationFrame(animationFrameId);
+            if (stopEffectFrameId) cancelAnimationFrame(stopEffectFrameId);
+            isRunning = false;
+            isDragging = false;
+            hasPlacedBall = false;
+            stoppedBySpeed = false;
+            springs = [];
+            trajectory = []; // Clear trajectory on reset
+            ball.vx = 0;
+            ball.vy = 0;
+            if (canvas.width > 0) {
+                 ball.x = containerCircle.x;
+                 ball.y = containerCircle.y;
+            }
+            draw();
+            showInitialMessage();
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Draw trajectory with fading effect
+            const trajectoryLength = trajectory.length;
+            const recentSegmentLength = 500;
+            const splitPoint = Math.max(0, trajectoryLength - recentSegmentLength);
+
+            ctx.lineWidth = 2;
+
+            // Draw older, fainter part of the trajectory
+            if (splitPoint > 1) {
+                ctx.beginPath();
+                ctx.strokeStyle = 'rgba(192, 77, 255, 0.2)'; // Fainter violet
+                ctx.moveTo(trajectory[0].x, trajectory[0].y);
+                for (let i = 1; i < splitPoint; i++) {
+                    ctx.lineTo(trajectory[i].x, trajectory[i].y);
+                }
+                ctx.stroke();
+            }
+
+            // Draw recent, brighter part of the trajectory
+            if (trajectoryLength > 1) {
+                // Start from the last point of the faint segment to ensure a continuous line
+                const startIdx = Math.max(0, splitPoint - 1);
+                ctx.beginPath();
+                ctx.strokeStyle = 'rgba(192, 77, 255, 0.7)'; // Brighter violet
+                // Start drawing from the last point of the old segment or the very first point
+                ctx.moveTo(trajectory[startIdx].x, trajectory[startIdx].y);
+                for (let i = startIdx + 1; i < trajectoryLength; i++) {
+                    ctx.lineTo(trajectory[i].x, trajectory[i].y);
+                }
+                ctx.stroke();
+            }
+
+            // Draw container circle
+            ctx.beginPath();
+            if (containerCircle.radius > 0) {
+                ctx.arc(containerCircle.x, containerCircle.y, containerCircle.radius, 0, Math.PI * 2);
+                ctx.strokeStyle = '#9ca3af';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+            }
+
+            // Draw springs
+            ctx.strokeStyle = 'rgba(129, 140, 248, 0.6)';
+            ctx.lineWidth = 2;
+            springs.forEach(spring => {
+                ctx.beginPath();
+                ctx.moveTo(spring.x, spring.y);
+                ctx.lineTo(ball.x, ball.y);
+                ctx.stroke();
+            });
+
+            // Draw the ball
+            if (hasPlacedBall) {
+                ctx.beginPath();
+                ctx.arc(ball.x, ball.y, ball.radius, 0, Math.PI * 2);
+                ctx.fillStyle = '#4f46e5';
+                ctx.fill();
+                ctx.strokeStyle = '#3730a3';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+            }
+
+            // Draw velocity vector
+            if (isDragging) {
+                ctx.beginPath();
+                ctx.moveTo(ball.x, ball.y);
+                ctx.lineTo(mouse.x, mouse.y);
+                ctx.strokeStyle = 'rgba(239, 68, 68, 0.8)';
+                ctx.lineWidth = 3;
+                ctx.stroke();
+            }
+        }
+
+        function showInitialMessage() {
+             if (!hasPlacedBall && canvas.width > 0) {
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+                ctx.textAlign = 'center';
+                ctx.font = '16px "Noto Sans SC"';
+                ctx.fillText('在圆圈内点击以放置小球', canvas.width / 2, canvas.height / 2);
+            } else if (!isRunning && canvas.width > 0) {
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+                ctx.textAlign = 'center';
+                ctx.font = '16px "Noto Sans SC"';
+                ctx.fillText('在小球上拖动以设置初始速度', canvas.width / 2, canvas.height / 2);
+            }
+        }
+        
+        function showStopMessage() {
+            let flashState = false;
+            let flashCounter = 0;
+            function animateStopEffect() {
+                flashCounter++;
+                if (flashCounter % 6 === 0) flashState = !flashState;
+                ctx.fillStyle = flashState ? 'rgb(153, 27, 27)' : '#000';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.save();
+                const shakeX = (Math.random() - 0.5) * 30;
+                const shakeY = (Math.random() - 0.5) * 30;
+                ctx.translate(canvas.width / 2 + shakeX, canvas.height / 2 + shakeY);
+                const clownSize = Math.min(canvas.width, canvas.height) * 0.6;
+                ctx.globalAlpha = 0.8 + Math.random() * 0.2;
+                drawScaryClown(0, -clownSize * 0.2, clownSize);
+                ctx.globalAlpha = 1;
+                ctx.textAlign = 'center';
+                ctx.fillStyle = 'white';
+                ctx.shadowColor = 'red';
+                ctx.shadowBlur = 20;
+                ctx.font = 'bold 50px "Noto Sans SC"';
+                ctx.fillText('速度超限!', 0, clownSize * 0.5);
+                ctx.restore();
+                stopEffectFrameId = requestAnimationFrame(animateStopEffect);
+            }
+            animateStopEffect();
+        }
+
+        function update() {
+            if (!isRunning) return;
+
+            let totalForceX = 0;
+            let totalForceY = 0;
+            springs.forEach(spring => {
+                const dx = ball.x - spring.x;
+                const dy = ball.y - spring.y;
+                totalForceX += -springConstant * dx;
+                totalForceY += -springConstant * dy;
+            });
+
+            ball.vx += totalForceX / ball.mass;
+            ball.vy += totalForceY / ball.mass;
+            ball.vx *= (1 - dampingCoefficient);
+            ball.vy *= (1 - dampingCoefficient);
+
+            const currentSpeed = Math.sqrt(ball.vx**2 + ball.vy**2);
+            if (currentSpeed > maxSpeed) {
+                isRunning = false;
+                stoppedBySpeed = true;
+                return;
+            }
+
+            ball.x += ball.vx;
+            ball.y += ball.vy;
+
+            // Add current position to trajectory
+            trajectory.push({ x: ball.x, y: ball.y });
+            // Limit trajectory length for performance
+            if (trajectory.length > 2000) {
+                trajectory.shift();
+            }
+
+            const distFromCenter = distance(ball.x, ball.y, containerCircle.x, containerCircle.y);
+            if (distFromCenter + ball.radius > containerCircle.radius) {
+                const normalX = (ball.x - containerCircle.x) / distFromCenter;
+                const normalY = (ball.y - containerCircle.y) / distFromCenter;
+                const vNormal = ball.vx * normalX + ball.vy * normalY;
+                const reflectVx = ball.vx - 2 * vNormal * normalX;
+                const reflectVy = ball.vy - 2 * vNormal * normalY;
+                ball.vx = reflectVx * wallRestitution;
+                ball.vy = reflectVy * wallRestitution;
+                const overlap = (distFromCenter + ball.radius) - containerCircle.radius;
+                ball.x -= overlap * normalX;
+                ball.y -= overlap * normalY;
+                const anchorX = containerCircle.x + containerCircle.radius * normalX;
+                const anchorY = containerCircle.y + containerCircle.radius * normalY;
+                springs.push({ x: anchorX, y: anchorY });
+            }
+        }
+
+        function gameLoop() {
+            if (!isRunning) {
+                if (stoppedBySpeed) {
+                    draw();
+                    showStopMessage();
+                }
+                return;
+            }
+            update();
+            draw();
+            animationFrameId = requestAnimationFrame(gameLoop);
+        }
+
+        // --- Event Listeners ---
+        wallRestitutionSlider.addEventListener('input', (e) => { wallRestitution = parseFloat(e.target.value); wallRestitutionValue.textContent = wallRestitution.toFixed(2); });
+        springConstantSlider.addEventListener('input', (e) => { springConstant = parseFloat(e.target.value); springConstantValue.textContent = springConstant.toFixed(4); });
+        ballMassSlider.addEventListener('input', (e) => { ball.mass = parseFloat(e.target.value); ballMassValue.textContent = ball.mass.toFixed(1); });
+        dampingSlider.addEventListener('input', (e) => { dampingCoefficient = parseFloat(e.target.value); dampingValue.textContent = dampingCoefficient.toFixed(3); });
+        maxSpeedSlider.addEventListener('input', (e) => { maxSpeed = parseFloat(e.target.value); maxSpeedValue.textContent = maxSpeed.toFixed(0); });
+        resetButton.addEventListener('click', reset);
+
+        function handleDragStart(e) {
+            e.preventDefault();
+            if (isRunning || stoppedBySpeed) return;
+            const mousePos = getMousePos(e);
+            if (!mousePos.x) return;
+            if (!hasPlacedBall) {
+                if (distance(mousePos.x, mousePos.y, containerCircle.x, containerCircle.y) < containerCircle.radius - ball.radius) {
+                    ball.x = mousePos.x; ball.y = mousePos.y; hasPlacedBall = true;
+                    draw(); showInitialMessage();
+                }
+            } else {
+                if (distance(mousePos.x, mousePos.y, ball.x, ball.y) < ball.radius + 15) {
+                    isDragging = true; mouse.x = mousePos.x; mouse.y = mousePos.y;
+                }
+            }
+        }
+        function handleDragMove(e) {
+            e.preventDefault();
+            if (isDragging) {
+                const mousePos = getMousePos(e); if (!mousePos.x) return;
+                mouse.x = mousePos.x; mouse.y = mousePos.y;
+                draw();
+            }
+        }
+        function handleDragEnd(e) {
+            e.preventDefault();
+            if (isDragging) {
+                isDragging = false; isRunning = true;
+                ball.vx = (ball.x - mouse.x) * 0.1;
+                ball.vy = (ball.y - mouse.y) * 0.1;
+                gameLoop();
+            }
+        }
+
+        canvas.addEventListener('mousedown', handleDragStart);
+        canvas.addEventListener('mousemove', handleDragMove);
+        canvas.addEventListener('mouseup', handleDragEnd);
+        canvas.addEventListener('mouseleave', handleDragEnd);
+        canvas.addEventListener('touchstart', handleDragStart);
+        canvas.addEventListener('touchmove', handleDragMove);
+        canvas.addEventListener('touchend', handleDragEnd);
+
+        window.addEventListener('resize', () => {
+            canvasSize = container.clientWidth;
+            if (canvasSize > 0) {
+                canvas.width = canvasSize; canvas.height = canvasSize;
+                containerCircle.x = canvas.width / 2; containerCircle.y = canvas.height / 2;
+                containerCircle.radius = Math.max(10, canvas.width / 2 - 20);
+                reset();
+            }
+        });
+
+        reset();
+    </script>
+</body>
+</html>

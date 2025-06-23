@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>布料与球体模拟</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+            margin: 0;
+            overflow: hidden;
+            background-color: #111827;
+            color: #e5e7eb;
+        }
+        #info {
+            position: absolute;
+            top: 0;
+            width: 100%;
+            padding: 20px;
+            box-sizing: border-box;
+            text-align: center;
+            z-index: 1;
+            pointer-events: none;
+            text-shadow: 0 0 5px rgba(0,0,0,0.5);
+        }
+        #controls {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 2;
+            background-color: rgba(31, 41, 55, 0.8);
+            padding: 15px 25px;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.4);
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+        label {
+            font-weight: 500;
+        }
+        input[type="range"] {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 200px;
+            height: 8px;
+            background: #4b5563;
+            border-radius: 5px;
+            outline: none;
+            opacity: 0.7;
+            transition: opacity .2s;
+        }
+        input[type="range"]:hover {
+            opacity: 1;
+        }
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            background: #60a5fa;
+            cursor: pointer;
+            border-radius: 50%;
+            border: 2px solid #1f2937;
+        }
+        input[type="range"]::-moz-range-thumb {
+            width: 20px;
+            height: 20px;
+            background: #60a5fa;
+            cursor: pointer;
+            border-radius: 50%;
+             border: 2px solid #1f2937;
+        }
+        #restart-btn {
+            background-color: #3b82f6;
+            color: white;
+            padding: 8px 16px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        #restart-btn:hover {
+            background-color: #2563eb;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="info">
+        <h1 class="text-2xl font-bold">布料与球体物理模拟</h1>
+        <p class="text-sm text-gray-400">中心固定，防止滑落 / 增强碰撞，防止穿模</p>
+    </div>
+
+    <div id="controls">
+        <label for="resolution">布料密度:</label>
+        <input type="range" id="resolution" min="1" max="80" value="25" step="1">
+        <span id="resolution-value" class="w-24 text-center">25 x 25</span>
+        <button id="restart-btn">重新开始</button>
+    </div>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.165.0/examples/jsm/"
+        }
+    }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        const DAMPING = 0.03;
+        const DRAG = 1 - DAMPING;
+        const GRAVITY = 9.8 * 140;
+        const TIMESTEP = 18 / 1000;
+        const TIMESTEP_SQ = TIMESTEP * TIMESTEP;
+        const SPHERE_RADIUS = 180;
+        const CLOTH_SIZE = SPHERE_RADIUS * 2.5;
+
+        // 【重要修正】增加约束迭代次数，防止穿模
+        const CONSTRAINT_ITERATIONS = 8;
+
+
+        let cloth, sphere;
+        let scene, camera, renderer, controls;
+        let clothGeometry, clothMesh;
+
+        class Particle {
+            constructor(x, y, z, invMass) {
+                this.position = new THREE.Vector3(x, y, z);
+                this.previous = new THREE.Vector3(x, y, z);
+                this.original = new THREE.Vector3(x, y, z);
+                this.acceleration = new THREE.Vector3(0, -GRAVITY, 0);
+                this.invMass = invMass;
+                // 【重要修正】新增一个属性来标记是否被固定
+                this.isPinned = false; 
+            }
+
+            integrate() {
+                if (this.invMass === 0) return;
+
+                const acc_scaled = this.acceleration.clone().multiplyScalar(this.invMass);
+                
+                let newPos = this.position.clone()
+                    .sub(this.previous)
+                    .multiplyScalar(DRAG)
+                    .add(this.position)
+                    .add(acc_scaled.multiplyScalar(TIMESTEP_SQ));
+
+                // 【重要修正】如果粒子被固定，则强制其X和Z坐标不变
+                if (this.isPinned) {
+                    newPos.x = this.original.x;
+                    newPos.z = this.original.z;
+                }
+
+                this.previous.copy(this.position);
+                this.position.copy(newPos);
+            }
+        }
+
+        class Cloth {
+            constructor(resolutionW, resolutionH) {
+                this.w = resolutionW;
+                this.h = resolutionH;
+                this.particles = [];
+                this.constraints = [];
+                
+                const restDistanceW = CLOTH_SIZE / this.w;
+                const restDistanceH = CLOTH_SIZE / this.h;
+                
+                const x_start = -CLOTH_SIZE / 2;
+                const y_start = SPHERE_RADIUS + 150;
+                const z_start = -CLOTH_SIZE / 2;
+
+                for (let v = 0; v <= this.h; v++) {
+                    for (let u = 0; u <= this.w; u++) {
+                        this.particles.push(
+                            new Particle(
+                                x_start + u * restDistanceW,
+                                y_start, 
+                                z_start + v * restDistanceH,
+                                1
+                            )
+                        );
+                    }
+                }
+                
+                // 【重要修正】固定中心粒子，防止滑落
+                const centerX = Math.floor(this.w / 2);
+                const centerY = Math.floor(this.h / 2);
+                this.getParticle(centerX, centerY).isPinned = true;
+
+                // 如果是偶数分辨率，则固定中心4个粒子
+                if(this.w % 2 === 0) this.getParticle(centerX + 1, centerY).isPinned = true;
+                if(this.h % 2 === 0) this.getParticle(centerX, centerY + 1).isPinned = true;
+                if(this.w % 2 === 0 && this.h % 2 === 0) this.getParticle(centerX + 1, centerY + 1).isPinned = true;
+                
+
+                for (let v = 0; v <= this.h; v++) {
+                    for (let u = 0; u <= this.w; u++) {
+                        if (v < this.h) {
+                            this.constraints.push([this.getParticle(u, v), this.getParticle(u, v + 1), restDistanceH]);
+                        }
+                        if (u < this.w) {
+                             this.constraints.push([this.getParticle(u, v), this.getParticle(u + 1, v), restDistanceW]);
+                        }
+                    }
+                }
+
+                for (let v = 0; v < this.h; v++) {
+                    for (let u = 0; u < this.w; u++) {
+                        const diagRestDistance = Math.sqrt(restDistanceW * restDistanceW + restDistanceH * restDistanceH);
+                        this.constraints.push([this.getParticle(u, v), this.getParticle(u + 1, v + 1), diagRestDistance]);
+                        this.constraints.push([this.getParticle(u + 1, v), this.getParticle(u, v + 1), diagRestDistance]);
+                    }
+                }
+            }
+
+            getParticle(u, v) {
+                return this.particles[u + v * (this.w + 1)];
+            }
+        }
+        
+        function satisfyConstraints(p1, p2, distance) {
+            const diff = p2.position.clone().sub(p1.position);
+            const currentDist = diff.length();
+            if (currentDist === 0) return; 
+
+            const correction = diff.multiplyScalar((currentDist - distance) / currentDist);
+            const totalInvMass = p1.invMass + p2.invMass;
+            if ( totalInvMass === 0 ) return; 
+
+            const correctionP1 = correction.clone().multiplyScalar( p1.invMass / totalInvMass );
+            const correctionP2 = correction.clone().multiplyScalar( - (p2.invMass / totalInvMass) );
+
+            if (!p1.isPinned) p1.position.add(correctionP1);
+            if (!p2.isPinned) p2.position.add(correctionP2);
+        }
+
+        function simulate(cloth, sphere) {
+            for (let i = 0, il = cloth.particles.length; i < il; i++) {
+                cloth.particles[i].integrate();
+            }
+
+            for (let i = 0; i < CONSTRAINT_ITERATIONS; i++) {
+                cloth.constraints.forEach(constraint => {
+                    satisfyConstraints(constraint[0], constraint[1], constraint[2]);
+                });
+
+                const spherePosition = sphere.position;
+                cloth.particles.forEach(p => {
+                    if (p.invMass !== 0) {
+                        const diff = p.position.clone().sub(spherePosition);
+                        const dist = diff.length();
+                        if (dist < SPHERE_RADIUS) {
+                            p.position.copy(spherePosition).add(diff.normalize().multiplyScalar(SPHERE_RADIUS));
+                        }
+                    }
+                });
+            }
+
+            const positions = clothGeometry.attributes.position;
+            for (let i = 0; i < cloth.particles.length; i++) {
+                positions.setXYZ(i, cloth.particles[i].position.x, cloth.particles[i].position.y, cloth.particles[i].position.z);
+            }
+            positions.needsUpdate = true;
+            
+            clothGeometry.computeVertexNormals();
+        }
+
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x111827);
+            scene.fog = new THREE.Fog(0x111827, 500, 3000);
+
+            camera = new THREE.PerspectiveCamera(30, window.innerWidth / window.innerHeight, 1, 5000);
+            camera.position.set(1000, 500, 1500);
+
+            scene.add(new THREE.AmbientLight(0x666666));
+            const light = new THREE.DirectionalLight(0xdfebff, 2);
+            light.position.set(50, 200, 100);
+            light.position.multiplyScalar(1.3);
+            light.castShadow = true;
+            light.shadow.mapSize.width = 1024;
+            light.shadow.mapSize.height = 1024;
+            scene.add(light);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            document.body.appendChild(renderer.domElement);
+            
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            controls.minDistance = 300;
+            controls.maxDistance = 2500;
+            
+            window.addEventListener('resize', onWindowResize);
+            initSceneContent();
+        }
+
+        function initSceneContent() {
+            if (clothMesh) scene.remove(clothMesh);
+            if (sphere) scene.remove(sphere);
+
+            const sphereGeo = new THREE.SphereGeometry(SPHERE_RADIUS, 40, 40);
+            const sphereMat = new THREE.MeshPhongMaterial({ color: 0x3b82f6 });
+            sphere = new THREE.Mesh(sphereGeo, sphereMat);
+            sphere.position.set(0, 0, 0);
+            sphere.castShadow = true;
+            sphere.receiveShadow = true;
+            scene.add(sphere);
+
+            const resolution = parseInt(document.getElementById('resolution').value);
+            cloth = new Cloth(resolution, resolution);
+
+            const clothMaterial = new THREE.MeshPhongMaterial({
+                color: 0xaaaaaa,
+                specular: 0x030303,
+                side: THREE.DoubleSide,
+            });
+            
+            clothGeometry = new THREE.PlaneGeometry(1, 1, cloth.w, cloth.h);
+            clothMesh = new THREE.Mesh(clothGeometry, clothMaterial);
+            clothMesh.castShadow = true;
+            scene.add(clothMesh);
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            simulate(cloth, sphere);
+            renderer.render(scene, camera);
+        }
+
+        const resolutionSlider = document.getElementById('resolution');
+        const resolutionValue = document.getElementById('resolution-value');
+        const restartBtn = document.getElementById('restart-btn');
+
+        resolutionSlider.addEventListener('input', (e) => {
+            const val = e.target.value;
+            resolutionValue.textContent = `${val} x ${val}`;
+        });
+        
+        resolutionSlider.addEventListener('change', () => {
+            initSceneContent();
+        });
+
+        restartBtn.addEventListener('click', () => {
+             initSceneContent();
+        });
+
+        init();
+        animate();
+
+    </script>
+</body>
+</html>

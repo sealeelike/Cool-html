@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Visualization of |sin(z)|</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <style>
+        /* 让图表铺满整个页面 */
+        body, html { margin: 0; padding: 0; width: 100%; height: 100%; }
+        #plotDiv { width: 100%; height: 100%; }
+    </style>
+</head>
+<body>
+    <div id="plotDiv"></div>
+
+    <script>
+        // 3. 编写 JavaScript 来生成数据并绘图
+        
+        // 定义绘图范围和精度
+        const x_min = -Math.PI * 2;
+        const x_max = Math.PI * 2;
+        const y_min = -2;
+        const y_max = 2;
+        const num_points = 100; // 提高此数值会让曲面更平滑，但计算量更大
+
+        // 生成 x 和 y 坐标点
+        const x_vals = [];
+        const y_vals = [];
+        for (let i = 0; i < num_points; i++) {
+            x_vals.push(x_min + (x_max - x_min) * i / (num_points - 1));
+            y_vals.push(y_min + (y_max - y_min) * i / (num_points - 1));
+        }
+
+        // 计算 z = |sin(x + iy)| 的值
+        // 我们使用数学恒等式: |sin(x+iy)|^2 = sin^2(x) + sinh^2(y)
+        // 其中 sinh 是双曲正弦函数 (Math.sinh)
+        const z_vals = [];
+        for (let i = 0; i < num_points; i++) {
+            const y = y_vals[i];
+            const row = [];
+            for (let j = 0; j < num_points; j++) {
+                const x = x_vals[j];
+                // 计算 z = sqrt(sin(x)^2 + sinh(y)^2)
+                const z = Math.sqrt(Math.pow(Math.sin(x), 2) + Math.pow(Math.sinh(y), 2));
+                row.push(z);
+            }
+            z_vals.push(row);
+        }
+
+        // 定义图表数据
+        const data = [{
+            x: x_vals,
+            y: y_vals,
+            z: z_vals,
+            type: 'surface',
+            colorscale: 'Viridis' // 定义颜色主题
+        }];
+
+        // 定义图表布局
+        const layout = {
+            title: '<b>Visualization of |sin(z)| where z = x + iy</b>',
+            scene: {
+                xaxis: { title: 'Real Axis (x)' },
+                yaxis: { title: 'Imaginary Axis (y)' },
+                zaxis: { title: 'Magnitude |sin(z)|' }
+            },
+            margin: { l: 0, r: 0, b: 0, t: 40 }
+        };
+
+        // 4. 调用 Plotly.js 绘图
+        Plotly.newPlot('plotDiv', data, layout);
+
+    </script>
+</body>
+</html>

@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>f(z) = |z|² 可导性可视化</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #1a1a1a; color: white; font-family: 'Segoe UI', sans-serif; }
+        #container { display: flex; width: 100vw; height: 100vh; }
+        #view3d { width: 60%; height: 100%; position: relative; border-right: 1px solid #444; }
+        #view2d { width: 40%; height: 100%; position: relative; background: #222; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+        #canvas2d { background: #000; border: 1px solid #555; margin-top: 20px; }
+        
+        .overlay {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 15px;
+            border-radius: 8px;
+            pointer-events: none;
+            max-width: 300px;
+        }
+        .overlay h2 { margin: 0 0 10px 0; font-size: 18px; color: #4db8ff; }
+        .overlay p { margin: 5px 0; font-size: 14px; line-height: 1.4; }
+        .math { font-family: 'Times New Roman', serif; font-style: italic; }
+        
+        .panel-right {
+            padding: 20px;
+            text-align: center;
+            width: 90%;
+        }
+        .status-box {
+            margin-top: 15px;
+            padding: 10px;
+            background: #333;
+            border-radius: 5px;
+            font-size: 1.1em;
+            font-weight: bold;
+        }
+        .differentiable { color: #00ff00; border: 1px solid #00ff00; }
+        .not-differentiable { color: #ff4444; border: 1px solid #ff4444; }
+        
+        #controls {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(0,0,0,0.8);
+            padding: 10px;
+            border-radius: 5px;
+            pointer-events: auto;
+        }
+    </style>
+    <!-- Import Three.js -->
+    <script async src="https://unpkg.com/es-module-shims@1.6.3/dist/es-module-shims.js"></script>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+        }
+      }
+    </script>
+</head>
+<body>
+
+<div id="container">
+    <!-- Left Panel: 3D Visualization -->
+    <div id="view3d">
+        <div class="overlay">
+            <h2>3D 视图: f(z) = |z|²</h2>
+            <p>曲面高度代表函数值 |z|²。</p>
+            <p><strong>操作说明：</strong></p>
+            <p>1. 拖动红球移动 z 点。</p>
+            <p>2. 鼠标左键旋转视角，右键平移。</p>
+        </div>
+        <div id="controls">
+            <label>z 位置: <span id="z-coord">0.00 + 0.00i</span></label>
+        </div>
+    </div>
+
+    <!-- Right Panel: Derivative Visualization -->
+    <div id="view2d">
+        <div class="panel-right">
+            <h2>导数显微镜</h2>
+            <p>我们计算极限比值：<br>
+            <span class="math">Q(h) = [f(z+h) - f(z)] / h</span></p>
+            <p>当 |h| 很小时，我们在复平面上画出不同方向 h 对应的 Q(h) 值。</p>
+            
+            <canvas id="canvas2d" width="350" height="350"></canvas>
+            
+            <div id="status" class="status-box differentiable">
+                状态: 可导
+            </div>
+            
+            <p style="margin-top:20px; text-align: left; font-size: 0.9em; color: #aaa;">
+                <strong>解释：</strong><br>
+                如果是<span style="color:#00ff00">单个点</span> → 极限唯一 → 可导<br>
+                如果是<span style="color:#ff4444">圆圈</span> → 极限依赖方向 → 不可导
+            </p>
+        </div>
+    </div>
+</div>
+
+<script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { DragControls } from 'three/addons/controls/DragControls.js';
+
+    // --- Global Variables ---
+    let zPoint = { x: 0, y: 0 }; // The current complex number z = x + iy
+    const hRadius = 0.001; // The magnitude of h for limit calculation (conceptually infinitesimal)
+
+    // --- 3D Scene Setup ---
+    const view3d = document.getElementById('view3d');
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x1a1a1a);
+
+    const camera = new THREE.PerspectiveCamera(45, view3d.clientWidth / view3d.clientHeight, 0.1, 100);
+    camera.position.set(5, 4, 5);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(view3d.clientWidth, view3d.clientHeight);
+    view3d.appendChild(renderer.domElement);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+
+    // --- Helpers ---
+    // Grid
+    const gridHelper = new THREE.GridHelper(10, 20, 0x555555, 0x333333);
+    scene.add(gridHelper);
+    
+    // Axes
+    const axesHelper = new THREE.AxesHelper(3);
+    scene.add(axesHelper);
+
+    // Create the Paraboloid Mesh: f(z) = x^2 + y^2
+    const geometry = new THREE.PlaneGeometry(6, 6, 40, 40);
+    const material = new THREE.MeshPhongMaterial({ 
+        color: 0x2194ce, 
+        side: THREE.DoubleSide, 
+        wireframe: false,
+        transparent: true,
+        opacity: 0.6,
+        shininess: 80
+    });
+    
+    // Deform plane to parabola
+    const count = geometry.attributes.position.count;
+    for (let i = 0; i < count; i++) {
+        const x = geometry.attributes.position.getX(i);
+        const y = geometry.attributes.position.getY(i);
+        // Map plane y to z-coordinate in complex plane (x, y) -> height z
+        // In ThreeJS: x is x, z is y (depth), y is height
+        const real = x;
+        const imag = -y; // ThreeJS z-axis is usually depth, let's map complex Im to ThreeJS Z
+        
+        geometry.attributes.position.setY(i, real*real + imag*imag); // Set height
+        geometry.attributes.position.setZ(i, imag); // Correct depth
+    }
+    geometry.computeVertexNormals();
+    const paraboloid = new THREE.Mesh(geometry, material);
+    scene.add(paraboloid);
+
+    // Wireframe for better visibility
+    const wireMat = new THREE.MeshBasicMaterial({ color: 0x44ccff, wireframe: true, transparent: true, opacity: 0.3 });
+    const wireMesh = new THREE.Mesh(geometry, wireMat);
+    scene.add(wireMesh);
+
+    // Interactive Point (The Red Sphere)
+    const sphereGeo = new THREE.SphereGeometry(0.15, 32, 32);
+    const sphereMat = new THREE.MeshBasicMaterial({ color: 0xff3333 });
+    const zMarker = new THREE.Mesh(sphereGeo, sphereMat);
+    scene.add(zMarker);
+
+    // Light
+    const ambientLight = new THREE.AmbientLight(0x404040);
+    scene.add(ambientLight);
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+    directionalLight.position.set(5, 10, 7);
+    scene.add(directionalLight);
+
+    // --- Interaction Logic (Raycaster for plane dragging) ---
+    // We create an invisible plane at y=0 (or conceptually perpendicular to camera) to catch mouse events for x,z movement
+    const raycaster = new THREE.Raycaster();
+    const mouse = new THREE.Vector2();
+    const dragPlane = new THREE.Mesh(
+        new THREE.PlaneGeometry(50, 50),
+        new THREE.MeshBasicMaterial({ visible: false })
+    );
+    dragPlane.rotation.x = -Math.PI / 2;
+    scene.add(dragPlane);
+
+    let isDragging = false;
+
+    window.addEventListener('mousedown', (e) => {
+        // Only trigger if inside the 3D view
+        const rect = renderer.domElement.getBoundingClientRect();
+        if (e.clientX >= rect.left && e.clientX <= rect.right && 
+            e.clientY >= rect.top && e.clientY <= rect.bottom) {
+                
+            mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+            mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+            
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObject(zMarker);
+            if (intersects.length > 0) {
+                isDragging = true;
+                controls.enabled = false; // Disable orbit when dragging
+            }
+        }
+    });
+
+    window.addEventListener('mousemove', (e) => {
+        if (!isDragging) return;
+        
+        const rect = renderer.domElement.getBoundingClientRect();
+        mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+        mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+
+        raycaster.setFromCamera(mouse, camera);
+        const intersects = raycaster.intersectObject(dragPlane);
+        
+        if (intersects.length > 0) {
+            const point = intersects[0].point;
+            // Limit range
+            const maxR = 2.5;
+            point.x = Math.max(-maxR, Math.min(maxR, point.x));
+            point.z = Math.max(-maxR, Math.min(maxR, point.z));
+
+            updateZState(point.x, point.z);
+        }
+    });
+
+    window.addEventListener('mouseup', () => {
+        isDragging = false;
+        controls.enabled = true;
+    });
+
+    // --- Core Logic: Update State ---
+    function updateZState(x, y) { // y input here is actually Imaginary part (ThreeJS Z)
+        zPoint.x = x;
+        zPoint.y = y;
+
+        // Update 3D Marker Position
+        // Height = |z|^2 = x^2 + y^2
+        const height = x*x + y*y;
+        zMarker.position.set(x, height, y);
+        
+        // Update UI Text
+        const sign = y >= 0 ? '+' : '';
+        document.getElementById('z-coord').innerText = `${x.toFixed(2)} ${sign}${y.toFixed(2)}i`;
+
+        // Update 2D Derivative Visualization
+        drawDerivativePlane();
+        
+        // Update Status Box
+        const dist = Math.sqrt(x*x + y*y);
+        const statusBox = document.getElementById('status');
+        if (dist < 0.1) {
+            statusBox.innerText = "状态: 可导 (接近原点)";
+            statusBox.className = "status-box differentiable";
+        } else {
+            statusBox.innerText = "状态: 不可导";
+            statusBox.className = "status-box not-differentiable";
+        }
+    }
+
+    // --- 2D Canvas Logic (The "Why") ---
+    const canvas = document.getElementById('canvas2d');
+    const ctx = canvas.getContext('2d');
+    const cx = canvas.width / 2;
+    const cy = canvas.height / 2;
+    const scale = 50; // Pixels per unit
+
+    function drawDerivativePlane() {
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        // Draw Axes
+        ctx.strokeStyle = '#333';
+        ctx.beginPath();
+        ctx.moveTo(0, cy); ctx.lineTo(canvas.width, cy);
+        ctx.moveTo(cx, 0); ctx.lineTo(cx, canvas.height);
+        ctx.stroke();
+
+        // Calculate Difference Quotients for a circle of h
+        // h = r * e^(i*theta), calculate [f(z+h) - f(z)] / h
+        
+        const r_h = 0.0001; // Ideally limit -> 0, but we need a number for calculation. 
+        // Actually, analytically:
+        // f(z) = z * z_bar
+        // Ratio = z * (h_bar/h) + z_bar + h_bar
+        // As h->0, term h_bar vanishes.
+        // Limit is z * e^(-2i*theta) + z_bar
+        
+        ctx.beginPath();
+        ctx.strokeStyle = '#00ff00';
+        ctx.lineWidth = 2;
+
+        const samples = 100;
+        for (let i = 0; i <= samples; i++) {
+            const theta = (i / samples) * Math.PI * 2;
+            
+            // Analytical Limit Calculation:
+            // The limit value depends on the angle of approach (theta)
+            // Limit(theta) = z * e^(-2iθ) + conjugate(z)
+            
+            // Term 1: z * e^(-2iθ)
+            // z = r_z * e^(i*phi)
+            // Term 1 = r_z * e^(i(phi - 2θ))
+            
+            // Let's do it in Cartesian coordinates for safety:
+            // z = x + iy
+            // Limit = (x+iy)(cos(-2θ) + i sin(-2θ)) + (x-iy)
+            
+            const x = zPoint.x;
+            const y = zPoint.y; // Imaginary part
+            
+            const cos2t = Math.cos(-2 * theta);
+            const sin2t = Math.sin(-2 * theta);
+            
+            // Term 1 (Rotation)
+            const t1_re = x * cos2t - y * sin2t;
+            const t1_im = x * sin2t + y * cos2t;
+            
+            // Term 2 (Conjugate z)
+            const t2_re = x;
+            const t2_im = -y;
+            
+            // Result Limit Vector
+            const res_re = t1_re + t2_re;
+            const res_im = t1_im + t2_im;
+            
+            const plotX = cx + res_re * scale;
+            const plotY = cy - res_im * scale; // Canvas Y is inverted
+            
+            if (i === 0) ctx.moveTo(plotX, plotY);
+            else ctx.lineTo(plotX, plotY);
+        }
+        ctx.closePath();
+        ctx.stroke();
+        
+        // Draw Center Point (conjuage z) which is the center of the derivative circle
+        ctx.fillStyle = '#555';
+        ctx.beginPath();
+        ctx.arc(cx + zPoint.x * scale, cy - (-zPoint.y) * scale, 3, 0, Math.PI*2);
+        ctx.fill();
+
+        // Explanation text on canvas
+        ctx.fillStyle = '#fff';
+        ctx.font = '12px Arial';
+        if (Math.abs(zPoint.x) < 0.1 && Math.abs(zPoint.y) < 0.1) {
+             ctx.fillText("点收缩到 0 -> 导数存在", 10, 20);
+        } else {
+             ctx.fillText("结果形成圆圈 -> 导数不存在", 10, 20);
+             ctx.fillStyle = '#aaa';
+             ctx.fillText("圆圈半径 = |z|", 10, 35);
+        }
+    }
+
+    // --- Animation Loop ---
+    function animate() {
+        requestAnimationFrame(animate);
+        controls.update();
+        renderer.render(scene, camera);
+    }
+
+    // Init state
+    updateZState(0.5, 0.5); // Start slightly off-center to show the circle
+    animate();
+
+    // Resize handler
+    window.addEventListener('resize', () => {
+        camera.aspect = view3d.clientWidth / view3d.clientHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(view3d.clientWidth, view3d.clientHeight);
+    });
+
+</script>
+</body>
+</html>

@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>反应速度测试 (Reaction Time Test)</title>
+    <!-- 引入 Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 引入 FontAwesome 图标 -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        /* 禁止在移动端双击缩放和长按选中文本，提升游戏体验 */
+        body {
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: manipulation;
+        }
+        .animate-pop {
+            animation: pop 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+        @keyframes pop {
+            0% { transform: scale(0.95); }
+            100% { transform: scale(1); }
+        }
+    </style>
+</head>
+<body class="bg-slate-900 text-white font-sans h-screen w-full overflow-hidden">
+
+    <!-- 主容器：占据全屏，也是点击区域 -->
+    <div id="game-area" class="w-full h-full flex flex-col items-center justify-center cursor-pointer transition-colors duration-200 relative">
+        
+        <!-- 顶部统计栏 -->
+        <div class="absolute top-8 flex gap-8 text-slate-200/60 font-medium text-lg pointer-events-none">
+            <div id="best-score-container" class="hidden">
+                <i class="fas fa-trophy text-yellow-500 mr-2"></i>最佳: <span id="best-time">0</span> ms
+            </div>
+        </div>
+
+        <!-- 中心内容区 -->
+        <div class="text-center pointer-events-none px-4 select-none">
+            <!-- 图标状态 -->
+            <div id="icon-display" class="text-8xl mb-6 opacity-80">
+                <i class="fas fa-bolt"></i>
+            </div>
+            
+            <!-- 主标题 -->
+            <h1 id="main-text" class="text-5xl md:text-6xl font-bold mb-4 tracking-wide shadow-black drop-shadow-lg">
+                反应速度测试
+            </h1>
+            
+            <!-- 副标题/说明 -->
+            <h2 id="sub-text" class="text-xl md:text-2xl text-white/80 font-light">
+                点击屏幕或按下空格键开始
+            </h2>
+        </div>
+
+        <!-- 底部提示 -->
+        <div class="absolute bottom-10 text-white/40 text-sm pointer-events-none">
+            支持键盘 Space 键
+        </div>
+    </div>
+
+    <script>
+        // --- 游戏状态管理 ---
+        const GameState = {
+            IDLE: 'idle',       // 初始状态/等待开始
+            WAITING: 'waiting', // 已开始，等待变绿 (红灯)
+            READY: 'ready',     // 已变绿，等待点击 (绿灯)
+            RESULT: 'result',   // 显示结果
+            EARLY: 'early'      // 抢跑/太早点击
+        };
+
+        let currentState = GameState.IDLE;
+        let timeoutId = null;
+        let startTime = 0;
+        let endTime = 0;
+        let bestTime = Infinity;
+
+        // --- DOM 元素 ---
+        const gameArea = document.getElementById('game-area');
+        const mainText = document.getElementById('main-text');
+        const subText = document.getElementById('sub-text');
+        const iconDisplay = document.getElementById('icon-display');
+        const bestScoreContainer = document.getElementById('best-score-container');
+        const bestTimeDisplay = document.getElementById('best-time');
+
+        // --- 核心逻辑 ---
+
+        function setUI(state, time = 0) {
+            // 重置所有背景色类
+            gameArea.className = "w-full h-full flex flex-col items-center justify-center cursor-pointer transition-colors duration-100 relative";
+            
+            // 移除之前的动画类以便重新触发
+            iconDisplay.classList.remove('animate-pop');
+            void iconDisplay.offsetWidth; // 触发重绘
+
+            switch (state) {
+                case GameState.IDLE:
+                    gameArea.classList.add('bg-slate-800', 'hover:bg-slate-700');
+                    iconDisplay.innerHTML = '<i class="fas fa-bolt text-yellow-400"></i>';
+                    mainText.innerText = "反应速度测试";
+                    subText.innerText = "点击屏幕任意位置开始";
+                    mainText.classList.remove('text-white');
+                    mainText.classList.add('text-white');
+                    break;
+
+                case GameState.WAITING:
+                    gameArea.classList.add('bg-red-600');
+                    iconDisplay.innerHTML = '<i class="fas fa-ellipsis text-white/80"></i>';
+                    mainText.innerText = "等待...";
+                    subText.innerText = "看到绿色时立即点击";
+                    break;
+
+                case GameState.READY:
+                    gameArea.classList.add('bg-green-500');
+                    iconDisplay.innerHTML = '<i class="fas fa-mouse-pointer text-white"></i>';
+                    mainText.innerText = "点！";
+                    subText.innerText = "快！";
+                    break;
+
+                case GameState.RESULT:
+                    gameArea.classList.add('bg-slate-800');
+                    iconDisplay.classList.add('animate-pop');
+                    iconDisplay.innerHTML = '<i class="fas fa-clock text-blue-400"></i>';
+                    mainText.innerText = `${time} ms`;
+                    subText.innerText = "点击保存并继续测试";
+                    
+                    // 更新最佳成绩 UI
+                    if (bestTime !== Infinity) {
+                        bestScoreContainer.classList.remove('hidden');
+                        bestTimeDisplay.innerText = bestTime;
+                    }
+                    break;
+
+                case GameState.EARLY:
+                    gameArea.classList.add('bg-orange-600');
+                    iconDisplay.classList.add('animate-pop');
+                    iconDisplay.innerHTML = '<i class="fas fa-exclamation-triangle text-white"></i>';
+                    mainText.innerText = "太快了！";
+                    subText.innerText = "请等待屏幕变绿后再点击";
+                    break;
+            }
+        }
+
+        function startGame() {
+            currentState = GameState.WAITING;
+            setUI(GameState.WAITING);
+
+            // 随机时间：2000ms 到 6000ms
+            const randomDelay = Math.floor(Math.random() * 4000) + 2000;
+
+            timeoutId = setTimeout(() => {
+                currentState = GameState.READY;
+                setUI(GameState.READY);
+                startTime = performance.now(); // 开始高精度计时
+            }, randomDelay);
+        }
+
+        function handleInteraction(e) {
+            // 防止空格键滚动页面
+            if (e.type === 'keydown' && e.code === 'Space') {
+                e.preventDefault();
+            }
+
+            // 状态机逻辑
+            switch (currentState) {
+                case GameState.IDLE:
+                case GameState.RESULT:
+                case GameState.EARLY:
+                    startGame();
+                    break;
+
+                case GameState.WAITING:
+                    // 抢跑逻辑
+                    clearTimeout(timeoutId);
+                    currentState = GameState.EARLY;
+                    setUI(GameState.EARLY);
+                    break;
+
+                case GameState.READY:
+                    // 结算逻辑
+                    endTime = performance.now();
+                    const reactionTime = Math.round(endTime - startTime);
+                    
+                    // 更新最佳成绩
+                    if (reactionTime < bestTime) {
+                        bestTime = reactionTime;
+                    }
+                    
+                    currentState = GameState.RESULT;
+                    setUI(GameState.RESULT, reactionTime);
+                    break;
+            }
+        }
+
+        // --- 事件监听 ---
+
+        // 鼠标/触摸点击
+        gameArea.addEventListener('mousedown', handleInteraction);
+        // 兼容移动端触摸
+        gameArea.addEventListener('touchstart', (e) => {
+            e.preventDefault(); // 防止触发随后的鼠标事件
+            handleInteraction(e);
+        }, { passive: false });
+
+        // 键盘事件
+        document.addEventListener('keydown', (e) => {
+            if (e.code === 'Space') {
+                handleInteraction(e);
+            }
+        });
+
+        // 初始化
+        setUI(GameState.IDLE);
+
+    </script>
+</body>
+</html>

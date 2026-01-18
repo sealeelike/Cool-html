@@ -1,0 +1,720 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sofle Keyboard Typing Practice</title>
+    <style>
+        :root {
+            /* --- Semantic Variables (Dynamic) --- */
+            /* Initial Default: Pink & Orange */
+            --bg-main: #E77C8E;
+            --key-bg: #F9CB8B;
+            
+            /* Calculated Text Colors */
+            --text-main: #2d3748; /* Text on Background */
+            --key-text: #2d3748;  /* Text on Key */
+            
+            /* Constants */
+            --key-shadow-opacity: 0.3;
+            --accent-correct: #48bb78;
+            --accent-error: #e53e3e;
+            
+            /* Focus/Target Color (Dynamic or Static) */
+            --accent-focus: #ffffff;
+
+            /* Layout Dimensions */
+            --u-size: 54px; 
+            --gap: 6px;     
+        }
+
+        body {
+            background-color: var(--bg-main);
+            color: var(--text-main);
+            font-family: 'Courier New', monospace;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            overflow: hidden;
+            transition: background-color 0.3s ease, color 0.3s ease;
+        }
+
+        /* --- Theme Controls (Top Right) --- */
+        #theme-controls {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            display: flex;
+            gap: 10px;
+            z-index: 100;
+        }
+
+        .theme-widget {
+            background-color: rgba(255, 255, 255, 0.9);
+            border: 1px solid rgba(0,0,0,0.1);
+            border-radius: 8px;
+            padding: 8px 12px;
+            font-family: inherit;
+            font-size: 14px;
+            color: #2d3748;
+            cursor: pointer;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            transition: all 0.2s;
+            outline: none;
+        }
+
+        .theme-widget:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 12px rgba(0,0,0,0.15);
+        }
+
+        #theme-swap {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            padding: 8px 14px;
+        }
+
+        /* --- 0. Control Bar (File Upload) --- */
+        #control-bar {
+            margin-bottom: 20px;
+            z-index: 20;
+        }
+
+        #file-input {
+            display: none; 
+        }
+
+        .upload-btn {
+            background-color: rgba(255, 255, 255, 0.9);
+            color: #2d3748;
+            border: 2px solid transparent;
+            padding: 12px 24px;
+            border-radius: 12px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 700;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+
+        .upload-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 15px rgba(0,0,0,0.15);
+            background-color: #fff;
+        }
+
+        /* --- 1. Display Area --- */
+        #display-container {
+            background: rgba(255, 255, 255, 0.9); 
+            padding: 30px 50px;
+            border-radius: 16px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.15); 
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            margin-bottom: 60px; 
+            width: 700px;
+            text-align: left;
+            position: relative;
+            z-index: 10;
+            /* Changed: Auto height for single line content */
+            height: auto;
+            min-height: 120px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+
+        /* Loading Overlay */
+        #loading-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(255, 255, 255, 0.85);
+            backdrop-filter: blur(4px);
+            border-radius: 16px;
+            display: none; /* Hidden by default */
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 50;
+            color: #2d3748;
+            font-weight: bold;
+            gap: 15px;
+        }
+
+        .spinner {
+            width: 32px;
+            height: 32px;
+            border: 4px solid rgba(0,0,0,0.1);
+            border-top: 4px solid #2d3748; /* Matches loading text color */
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .text-row {
+            font-size: 1.5rem;
+            line-height: 2.2rem;
+            letter-spacing: 2px;
+            /* Changed to pre-wrap to prevent text from being hidden if calculation is slightly off */
+            white-space: pre-wrap; 
+            font-variant-ligatures: none;
+            min-height: 2.2rem;
+            overflow: hidden;  
+            color: #2d3748; 
+        }
+
+        /* Target Row */
+        #target-row {
+            color: #718096;
+            border-bottom: 2px solid #e2e8f0;
+            margin-bottom: 5px;
+            padding-bottom: 5px;
+            user-select: none;
+        }
+
+        /* Input Row */
+        #input-row {
+            position: relative;
+        }
+
+        /* Char States */
+        .char-correct { color: var(--accent-correct); font-weight: bold; }
+        .char-error { 
+            color: var(--accent-error); 
+            background-color: rgba(229, 62, 62, 0.1);
+            text-decoration: underline;
+        }
+
+        /* Cursor */
+        #cursor {
+            display: inline-block;
+            width: 3px;
+            height: 1.5rem;
+            background-color: #2d3748;
+            vertical-align: middle;
+            animation: blink 1s infinite;
+            margin-left: 2px;
+            border-radius: 2px;
+        }
+
+        @keyframes blink { 50% { opacity: 0; } }
+
+        /* --- 2. Keyboard Area --- */
+        #keyboard-wrapper {
+            position: relative;
+            width: calc(var(--u-size) * 14 + var(--gap) * 14); 
+            height: calc(var(--u-size) * 5 + var(--gap) * 5); 
+            margin-top: 10px;
+        }
+
+        .key-unit {
+            position: absolute;
+            background-color: var(--key-bg);
+            width: var(--u-size);
+            height: var(--u-size);
+            border-radius: 8px; 
+            box-shadow: 0 4px 0 rgba(0,0,0, var(--key-shadow-opacity)), 0 2px 4px rgba(0,0,0,0.1);
+            color: var(--key-text);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 14px;
+            user-select: none;
+            box-sizing: border-box;
+            border: 2px solid transparent;
+            transition: transform 0.05s, box-shadow 0.05s, border-color 0.2s, background-color 0.3s, color 0.3s;
+        }
+
+        .key-unit.pressed {
+            transform: translateY(4px) !important;
+            box-shadow: 0 0 0 rgba(0,0,0,0) !important;
+            filter: brightness(1.2); 
+        }
+
+        .key-unit.target {
+            border-color: var(--accent-focus);
+            box-shadow: 0 0 15px var(--accent-focus), 0 4px 0 rgba(0,0,0, var(--key-shadow-opacity));
+            z-index: 5;
+        }
+
+        .key-unit.flash-error {
+            background-color: var(--accent-error) !important;
+            color: #fff !important;
+            box-shadow: 4px 0 #9b2c2c; /* Fixed shadow syntax error from previous version */
+            transition: background-color 0.1s;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Theme Controls -->
+    <div id="theme-controls">
+        <select id="theme-select" class="theme-widget">
+            <!-- Populated by JS -->
+        </select>
+        <button id="theme-swap" class="theme-widget" title="Swap Background & Key Colors">
+            ⇄
+        </button>
+    </div>
+
+    <!-- Control Bar -->
+    <div id="control-bar">
+        <label for="file-input" class="upload-btn">
+            📁 Upload File (.txt/.md)
+        </label>
+        <input type="file" id="file-input" accept=".txt,.md">
+    </div>
+
+    <div id="display-container">
+        <!-- Loading UI -->
+        <div id="loading-overlay">
+            <div class="spinner"></div>
+            <span>Processing File...</span>
+        </div>
+
+        <!-- Target Text (One line only) -->
+        <div id="target-row" class="text-row"></div>
+        <!-- User Input -->
+        <div id="input-row" class="text-row"><span id="cursor"></span></div>
+    </div>
+
+    <div id="keyboard-wrapper">
+        <!-- JS generated keys -->
+    </div>
+
+    <script>
+        // --- Theme Data ---
+        // Swapped bg/key for Navy Mint, Coral Cream, Bronze White as requested
+        const themes = [
+            { name: "Default Pink", bg: "#E77C8E", key: "#F9CB8B" },
+            { name: "Nordic Mint", bg: "#425066", key: "#A4E2C6" },
+            { name: "Deep Ocean", bg: "#0C567D", key: "#EDB79C" },
+            { name: "Navy Mint",   bg: "#A4E2C6", key: "#012696" }, // Swapped
+            { name: "Coral Cream", bg: "#E9E3B9", key: "#ED9874" }, // Swapped
+            { name: "Bronze White",bg: "#F2ECDE", key: "#B05B24" }, // Swapped
+            { name: "Teal Cream",  bg: "#549688", key: "#F4EAC5" }
+        ];
+
+        let currentThemeIndex = 0;
+        let isSwapped = false;
+
+        // --- Theme Logic ---
+        function getContrastColor(hexColor) {
+            const r = parseInt(hexColor.substr(1, 2), 16);
+            const g = parseInt(hexColor.substr(3, 2), 16);
+            const b = parseInt(hexColor.substr(5, 2), 16);
+            const yiq = ((r * 299) + (g * 587) + (b * 114)) / 1000;
+            return (yiq >= 128) ? '#2d3748' : '#ffffff';
+        }
+
+        function applyTheme() {
+            const theme = themes[currentThemeIndex];
+            const root = document.documentElement;
+
+            const activeBg = isSwapped ? theme.key : theme.bg;
+            const activeKey = isSwapped ? theme.bg : theme.key;
+
+            root.style.setProperty('--bg-main', activeBg);
+            root.style.setProperty('--key-bg', activeKey);
+
+            root.style.setProperty('--text-main', getContrastColor(activeBg));
+            root.style.setProperty('--key-text', getContrastColor(activeKey));
+            
+            root.style.setProperty('--accent-focus', getContrastColor(activeKey) === '#ffffff' ? '#ffffff' : '#4299e1');
+        }
+
+        function initThemeControls() {
+            const select = document.getElementById('theme-select');
+            themes.forEach((t, i) => {
+                const opt = document.createElement('option');
+                opt.value = i;
+                opt.innerText = `🎨 ${t.name}`;
+                select.appendChild(opt);
+            });
+
+            select.addEventListener('change', (e) => {
+                currentThemeIndex = parseInt(e.target.value);
+                isSwapped = false; 
+                applyTheme();
+                // FIX: Blur immediately to prevent keyboard interference
+                e.target.blur();
+                document.body.focus();
+            });
+
+            document.getElementById('theme-swap').addEventListener('click', (e) => {
+                isSwapped = !isSwapped;
+                applyTheme();
+                // FIX: Blur immediately to prevent spacebar from triggering click again
+                e.target.blur();
+                document.body.focus();
+            });
+
+            applyTheme();
+        }
+
+        // --- 1. Keyboard Layout Data ---
+        const U = 54; 
+        const GAP = 6;
+        const layoutData = [];
+
+        // Left Hand (x: 0-5)
+        layoutData.push(
+            {x:0,y:0, l:"Esc", c:"Escape"}, {x:1,y:0, l:"1", c:"Digit1"}, {x:2,y:0, l:"2", c:"Digit2"}, {x:3,y:0, l:"3", c:"Digit3"}, {x:4,y:0, l:"4", c:"Digit4"}, {x:5,y:0, l:"5", c:"Digit5"},
+            {x:0,y:1, l:"Tab", c:"Tab"},    {x:1,y:1, l:"Q", c:"KeyQ"},   {x:2,y:1, l:"W", c:"KeyW"},   {x:3,y:1, l:"E", c:"KeyE"},   {x:4,y:1, l:"R", c:"KeyR"},   {x:5,y:1, l:"T", c:"KeyT"},
+            {x:0,y:2, l:"Caps",c:"CapsLock"},{x:1,y:2, l:"A", c:"KeyA"},   {x:2,y:2, l:"S", c:"KeyS"},   {x:3,y:2, l:"D", c:"KeyD"},   {x:4,y:2, l:"F", c:"KeyF"},   {x:5,y:2, l:"G", c:"KeyG"},
+            {x:0,y:3, l:"Sft", c:"ShiftLeft"},{x:1,y:3, l:"Z", c:"KeyZ"},   {x:2,y:3, l:"X", c:"KeyX"},   {x:3,y:3, l:"C", c:"KeyC"},   {x:4,y:3, l:"V", c:"KeyV"},   {x:5,y:3, l:"B", c:"KeyB"}
+        );
+
+        // Left Thumbs
+        layoutData.push(
+            {x:2, y:4, l:"Win", c:"MetaLeft"},
+            {x:3, y:4, l:"Alt", c:"AltLeft"},
+            {x:4, y:4, l:"Spc", c:"Space"},       
+            {x:5, y:4, l:"Ctl", c:"ControlLeft"}, 
+            {x:6, y:4, l:"MO2", c:"Layer2"}       
+        );
+
+        // Right Hand (x: 8-13)
+        const RX = 8;
+        layoutData.push(
+            {x:RX+0,y:0, l:"6", c:"Digit6"}, {x:RX+1,y:0, l:"7", c:"Digit7"}, {x:RX+2,y:0, l:"8", c:"Digit8"}, {x:RX+3,y:0, l:"9", c:"Digit9"}, {x:RX+4,y:0, l:"0", c:"Digit0"}, {x:RX+5,y:0, l:"Bksp", c:"Backspace"},
+            {x:RX+0,y:1, l:"Y", c:"KeyY"},   {x:RX+1,y:1, l:"U", c:"KeyU"},   {x:RX+2,y:1, l:"I", c:"KeyI"},   {x:RX+3,y:1, l:"O", c:"KeyO"},   {x:RX+4,y:1, l:"P", c:"KeyP"},   {x:RX+5,y:1, l:"\\", c:"Backslash"},
+            {x:RX+0,y:2, l:"H", c:"KeyH"},   {x:RX+1,y:2, l:"J", c:"KeyJ"},   {x:RX+2,y:2, l:"K", c:"KeyK"},   {x:RX+3,y:2, l:"L", c:"KeyL"},   {x:RX+4,y:2, l:";", c:"Semicolon"},{x:RX+5,y:2, l:"'", c:"Quote"},
+            {x:RX+0,y:3, l:"N", c:"KeyN"},   {x:RX+1,y:3, l:"M", c:"KeyM"},   {x:RX+2,y:3, l:",", c:"Comma"},  {x:RX+3,y:3, l:".", c:"Period"}, {x:RX+4,y:3, l:"/", c:"Slash"},  {x:RX+5,y:3, l:"Ent", c:"Enter"}
+        );
+
+        // Right Thumbs
+        layoutData.push(
+            {x:RX-1, y:4, l:"MO1", c:"Layer1"},      
+            {x:RX+0, y:4, l:"Sft", c:"ShiftRight"},  
+            {x:RX+1, y:4, l:"Spc", c:"Space"},       
+            {x:RX+2, y:4, l:"-", c:"Minus"},         
+            {x:RX+3, y:4, l:"=", c:"Equal"}          
+        );
+
+        // --- 2. Render Engine ---
+        const wrapper = document.getElementById('keyboard-wrapper');
+
+        function getColumnOffset(x) {
+            // Left Hand
+            if (x === 2) return 0.3;  
+            if (x === 3) return 0.45; 
+            if (x === 4) return 0.3;  
+            if (x === 5) return 0.2;  
+
+            // Right Hand 
+            if (x === 8) return 0.2;
+            if (x === 9) return 0.3;
+            if (x === 10) return 0.45;
+            if (x === 11) return 0.3;
+
+            return 0; 
+        }
+
+        function renderKeyboard() {
+            layoutData.forEach(key => {
+                const el = document.createElement('div');
+                el.className = 'key-unit';
+                el.innerText = key.l;
+                el.dataset.code = key.c; 
+
+                let leftPx = key.x * (U + GAP);
+                let topPx = key.y * (U + GAP);
+
+                const offsetU = getColumnOffset(key.x);
+                topPx -= offsetU * U;
+
+                el.style.left = `${leftPx}px`;
+                el.style.top = `${topPx}px`;
+                
+                wrapper.appendChild(el);
+            });
+        }
+
+        // --- 3. Core Logic (Refactored for Single Line) ---
+        // State
+        let allLines = [];        // Stores all split lines
+        let currentLineIndex = 0; // Current index in allLines
+        let targetText = "Please upload a file (.txt/.md) to start practicing..."; 
+        let userInput = "";
+        
+        const targetRow = document.getElementById('target-row');
+        const inputRow = document.getElementById('input-row');
+        const cursor = document.getElementById('cursor');
+        const fileInput = document.getElementById('file-input');
+        const loadingOverlay = document.getElementById('loading-overlay');
+        
+        // Helper: Split text into readable lines (Smart Segmentation)
+        // 1. Force break at MAX_CHARS (40) to prevent overflow
+        // 2. Prefer break at punctuation if length > MIN_CHARS (20)
+        // 3. Force split long strings if NO space is available
+        function splitTextIntoLines(text) {
+            const MAX_CHARS = 40; // Conservative limit for 700px width
+            const MIN_CHARS = 20; // Min length to allow punctuation break (prevents choppy lines)
+
+            // Clean up text
+            const cleanText = text.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
+            const words = cleanText.split(' ');
+            const lines = [];
+            let currentLine = [];
+            let currentLen = 0;
+
+            words.forEach(word => {
+                // HANDLE MASSIVE WORDS: If the word itself is longer than MAX_CHARS
+                if (word.length > MAX_CHARS) {
+                    // 1. Flush existing line if any
+                    if (currentLine.length > 0) {
+                        lines.push(currentLine.join(' '));
+                        currentLine = [];
+                        currentLen = 0;
+                    }
+                    
+                    // 2. Force slice the long word into chunks
+                    let remaining = word;
+                    while (remaining.length > MAX_CHARS) {
+                        lines.push(remaining.substring(0, MAX_CHARS));
+                        remaining = remaining.substring(MAX_CHARS);
+                    }
+                    
+                    // 3. Keep the remainder for the next line processing
+                    if (remaining.length > 0) {
+                        currentLine = [remaining];
+                        currentLen = remaining.length;
+                    }
+                } else {
+                    // STANDARD LOGIC for normal words
+                    const wordLen = word.length;
+                    // Length if we add this word (including space)
+                    const potentialLen = currentLen + (currentLine.length > 0 ? 1 : 0) + wordLen;
+
+                    // Priority 1: Prevent Overflow
+                    if (potentialLen > MAX_CHARS) {
+                        // Current line is full, push it
+                        lines.push(currentLine.join(' '));
+                        // Start new line with current word
+                        currentLine = [word];
+                        currentLen = wordLen;
+                    } else {
+                        // Add word to buffer
+                        currentLine.push(word);
+                        currentLen = potentialLen;
+
+                        // Priority 2: Smart Punctuation Break
+                        // If word ends with punctuation AND line is long enough -> break here
+                        if (/[.!?。！？]$/.test(word) && currentLen > MIN_CHARS) {
+                            lines.push(currentLine.join(' '));
+                            currentLine = [];
+                            currentLen = 0;
+                        }
+                    }
+                }
+            });
+
+            // Flush remaining buffer
+            if (currentLine.length > 0) lines.push(currentLine.join(' '));
+            
+            // Fail-safe for empty content or fallback cases
+            if (lines.length === 0) {
+                 lines.push(cleanText.substring(0, MAX_CHARS) || " ");
+            }
+            return lines;
+        }
+
+        // File Upload Listener
+        fileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            // 1. Show Loading UI
+            loadingOverlay.style.display = 'flex';
+
+            // 2. Delay processing to allow UI to render loading state
+            setTimeout(() => {
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    const rawText = event.target.result;
+                    
+                    if (!rawText.trim()) {
+                        alert("File content is empty!");
+                        loadingOverlay.style.display = 'none'; // Hide if empty
+                        return;
+                    }
+
+                    // Processing (heavy lifting potentially)
+                    allLines = splitTextIntoLines(rawText);
+                    currentLineIndex = 0;
+                    targetText = allLines[0];
+                    userInput = "";
+                    
+                    document.activeElement.blur();
+                    updateUI();
+                    
+                    // 3. Hide Loading & Focus
+                    loadingOverlay.style.display = 'none';
+                    document.body.focus();
+                };
+
+                // Handle errors
+                reader.onerror = () => {
+                    alert("Error reading file.");
+                    loadingOverlay.style.display = 'none';
+                };
+
+                reader.readAsText(file);
+            }, 100); // 100ms delay to ensure spinner appears
+        });
+
+        // Init
+        function initGame() {
+            initThemeControls();
+            // Default initial state
+            allLines = [targetText];
+            updateUI();
+        }
+
+        function updateUI() {
+            // Update the text display to show CURRENT line only
+            targetRow.innerText = targetText;
+
+            // Render Input
+            while(inputRow.firstChild && inputRow.firstChild !== cursor) {
+                inputRow.removeChild(inputRow.firstChild);
+            }
+
+            for (let i = 0; i < userInput.length; i++) {
+                const span = document.createElement('span');
+                const char = userInput[i];
+                const expected = targetText[i];
+                
+                span.innerText = char === ' ' ? ' ' : char;
+                if (expected && char === expected) {
+                    span.className = 'char-correct';
+                } else {
+                    span.className = 'char-error';
+                }
+                inputRow.insertBefore(span, cursor);
+            }
+
+            // Highlight Target Key
+            document.querySelectorAll('.key-unit').forEach(k => k.classList.remove('target'));
+            
+            // Highlight next character key
+            if (userInput.length < targetText.length) {
+                const nextChar = targetText[userInput.length];
+                let targetCode = getKeyCode(nextChar);
+                
+                if (targetCode) {
+                    const keys = document.querySelectorAll(`.key-unit[data-code="${targetCode}"]`);
+                    if (keys.length > 0) {
+                        keys.forEach(k => k.classList.add('target'));
+                    }
+                }
+            }
+        }
+
+        function getKeyCode(char) {
+            if (!char) return null;
+            const upper = char.toUpperCase();
+            if (upper === ' ') return 'Space';
+            if (/[0-9]/.test(upper)) return `Digit${upper}`;
+            if (/[A-Z]/.test(upper)) return `Key${upper}`;
+            if (upper === '-') return 'Minus'; 
+            if (upper === '=') return 'Equal'; 
+            if (upper === ';') return 'Semicolon';
+            if (upper === "'") return 'Quote';
+            if (upper === ',') return 'Comma';
+            if (upper === '.') return 'Period';
+            if (upper === '/') return 'Slash';
+            if (upper === '\\') return 'Backslash';
+            return null;
+        }
+
+        // --- 4. Event Listeners ---
+        window.addEventListener('keydown', (e) => {
+            // FIX: Prevent space from activating focused buttons or scrolling
+            if(e.key === 'Tab' || e.key === 'Backspace' || e.key === "'" || e.key === " ") {
+                e.preventDefault();
+            }
+
+            const keyEls = document.querySelectorAll(`.key-unit[data-code="${e.code}"]`);
+            
+            if (keyEls.length > 0) {
+                keyEls.forEach(keyEl => {
+                    keyEl.classList.add('pressed');
+                    setTimeout(() => keyEl.classList.remove('pressed'), 150);
+                });
+            }
+
+            // Handle Backspace
+            if (e.key === 'Backspace') {
+                if (userInput.length > 0) {
+                    userInput = userInput.slice(0, -1);
+                    updateUI();
+                }
+                return;
+            }
+
+            // IGNORE non-character keys (The Fix)
+            // This prevents "ArrowLeft", "Enter", "Escape" etc. from being printed as text
+            if (e.key.length > 1) return;
+
+            // Modifiers check is mostly covered by length > 1, but keep specific ones if needed
+            // if (['Shift', 'Control', 'Alt', 'CapsLock', 'Meta'].includes(e.key)) return;
+
+            // Input Logic
+            if (userInput.length < targetText.length) {
+                userInput += e.key;
+                
+                // Visual Error Feedback
+                const expected = targetText[userInput.length - 1];
+                if (e.key !== expected && keyEls.length > 0) {
+                    keyEls.forEach(keyEl => {
+                        keyEl.classList.add('flash-error');
+                        setTimeout(() => keyEl.classList.remove('flash-error'), 300);
+                    });
+                }
+
+                // Check for Line Completion
+                if (userInput.length === targetText.length) {
+                    // Line finished! Move to next line automatically
+                    if (currentLineIndex < allLines.length - 1) {
+                        currentLineIndex++;
+                        targetText = allLines[currentLineIndex];
+                        userInput = ""; // Clear input for new line
+                    } else {
+                        // End of file
+                        alert("Great job! Practice complete.");
+                        // Reset to start? Or stay?
+                        currentLineIndex = 0;
+                        targetText = allLines[0];
+                        userInput = "";
+                    }
+                }
+                
+                updateUI();
+            }
+        });
+
+        // Start
+        renderKeyboard();
+        initGame();
+
+    </script>
+</body>
+</html>

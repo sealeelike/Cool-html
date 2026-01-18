@@ -42,6 +42,43 @@
             transition: background-color 0.3s ease, color 0.3s ease;
         }
 
+        /* --- Stats Bar (Top Left) --- */
+        #stats-bar {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            display: flex;
+            gap: 15px;
+            z-index: 100;
+        }
+
+        .stat-card {
+            background-color: rgba(255, 255, 255, 0.9);
+            border: 1px solid rgba(0,0,0,0.1);
+            border-radius: 8px;
+            padding: 8px 16px;
+            font-size: 14px;
+            font-weight: bold;
+            color: #2d3748;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-width: 70px;
+            transition: all 0.2s;
+        }
+
+        .stat-label {
+            font-size: 10px;
+            text-transform: uppercase;
+            color: #718096;
+            margin-bottom: 2px;
+        }
+
+        .stat-value {
+            font-size: 18px;
+        }
+
         /* --- Theme Controls (Top Right) --- */
         #theme-controls {
             position: absolute;
@@ -263,6 +300,22 @@
 </head>
 <body>
 
+    <!-- Stats Bar (Top Left) -->
+    <div id="stats-bar">
+        <div class="stat-card">
+            <span class="stat-label">Time</span>
+            <span id="stat-time" class="stat-value">00:00</span>
+        </div>
+        <div class="stat-card">
+            <span class="stat-label">Avg WPM</span>
+            <span id="stat-avg" class="stat-value">0</span>
+        </div>
+        <div class="stat-card" title="Speed in last 3 seconds">
+            <span class="stat-label">3s WPM</span>
+            <span id="stat-current" class="stat-value">0</span>
+        </div>
+    </div>
+
     <!-- Theme Controls -->
     <div id="theme-controls">
         <select id="theme-select" class="theme-widget">
@@ -453,6 +506,12 @@
         let currentLineIndex = 0; // Current index in allLines
         let targetText = "Please upload a file (.txt/.md) to start practicing..."; 
         let userInput = "";
+
+        // Statistics State
+        let startTime = null;
+        let timerInterval = null;
+        let totalCorrectChars = 0; // Cumulative across lines
+        let keyHistory = []; // Array of timestamps for 3s avg
         
         const targetRow = document.getElementById('target-row');
         const inputRow = document.getElementById('input-row');
@@ -460,13 +519,14 @@
         const fileInput = document.getElementById('file-input');
         const loadingOverlay = document.getElementById('loading-overlay');
         
+        const statTime = document.getElementById('stat-time');
+        const statAvg = document.getElementById('stat-avg');
+        const statCurrent = document.getElementById('stat-current');
+
         // Helper: Split text into readable lines (Smart Segmentation)
-        // 1. Force break at MAX_CHARS (40) to prevent overflow
-        // 2. Prefer break at punctuation if length > MIN_CHARS (20)
-        // 3. Force split long strings if NO space is available
         function splitTextIntoLines(text) {
-            const MAX_CHARS = 40; // Conservative limit for 700px width
-            const MIN_CHARS = 20; // Min length to allow punctuation break (prevents choppy lines)
+            const MAX_CHARS = 40; 
+            const MIN_CHARS = 20; 
 
             // Clean up text
             const cleanText = text.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
@@ -476,47 +536,33 @@
             let currentLen = 0;
 
             words.forEach(word => {
-                // HANDLE MASSIVE WORDS: If the word itself is longer than MAX_CHARS
+                // HANDLE MASSIVE WORDS
                 if (word.length > MAX_CHARS) {
-                    // 1. Flush existing line if any
                     if (currentLine.length > 0) {
                         lines.push(currentLine.join(' '));
                         currentLine = [];
                         currentLen = 0;
                     }
-                    
-                    // 2. Force slice the long word into chunks
                     let remaining = word;
                     while (remaining.length > MAX_CHARS) {
                         lines.push(remaining.substring(0, MAX_CHARS));
                         remaining = remaining.substring(MAX_CHARS);
                     }
-                    
-                    // 3. Keep the remainder for the next line processing
                     if (remaining.length > 0) {
                         currentLine = [remaining];
                         currentLen = remaining.length;
                     }
                 } else {
-                    // STANDARD LOGIC for normal words
                     const wordLen = word.length;
-                    // Length if we add this word (including space)
                     const potentialLen = currentLen + (currentLine.length > 0 ? 1 : 0) + wordLen;
 
-                    // Priority 1: Prevent Overflow
                     if (potentialLen > MAX_CHARS) {
-                        // Current line is full, push it
                         lines.push(currentLine.join(' '));
-                        // Start new line with current word
                         currentLine = [word];
                         currentLen = wordLen;
                     } else {
-                        // Add word to buffer
                         currentLine.push(word);
                         currentLen = potentialLen;
-
-                        // Priority 2: Smart Punctuation Break
-                        // If word ends with punctuation AND line is long enough -> break here
                         if (/[.!?。！？]$/.test(word) && currentLen > MIN_CHARS) {
                             lines.push(currentLine.join(' '));
                             currentLine = [];
@@ -526,14 +572,74 @@
                 }
             });
 
-            // Flush remaining buffer
             if (currentLine.length > 0) lines.push(currentLine.join(' '));
-            
-            // Fail-safe for empty content or fallback cases
             if (lines.length === 0) {
                  lines.push(cleanText.substring(0, MAX_CHARS) || " ");
             }
             return lines;
+        }
+
+        // Timer Logic
+        function startTimer() {
+            if (startTime) return;
+            startTime = Date.now();
+            timerInterval = setInterval(() => {
+                updateStatsDisplay();
+            }, 100); // Update frequently for smooth time
+        }
+
+        function stopTimer() {
+            clearInterval(timerInterval);
+            timerInterval = null;
+        }
+
+        function updateStatsDisplay() {
+            if (!startTime) return;
+            const now = Date.now();
+            const elapsedSec = (now - startTime) / 1000;
+            const elapsedMin = elapsedSec / 60;
+
+            // 1. Time (MM:SS)
+            const mm = Math.floor(elapsedSec / 60).toString().padStart(2, '0');
+            const ss = Math.floor(elapsedSec % 60).toString().padStart(2, '0');
+            statTime.innerText = `${mm}:${ss}`;
+
+            // 2. Avg WPM
+            // Standard: (Chars / 5) / Mins
+            const currentSessionChars = totalCorrectChars + userInput.length; 
+            // Note: userInput.length is strictly current line progress. totalCorrectChars is past lines.
+            // But we need to count *correct* chars only if we want strict WPM. 
+            // For simplicity in this practice tool, we assume typed = correct enough for live stats,
+            // or we could track precise correct hits. Let's use total correct entries.
+            // Since we only advance or error check, let's just use total chars typed successfully.
+            // Wait, logic below counts errors too? No, userInput only grows.
+            
+            // Refined total: totalCorrectChars (from previous lines) + current valid length
+            const wpm = Math.round((currentSessionChars / 5) / elapsedMin) || 0;
+            statAvg.innerText = wpm;
+
+            // 3. Current 3s WPM
+            // Filter history to last 3 seconds
+            const threeSecsAgo = now - 3000;
+            // Remove old entries efficiently
+            while (keyHistory.length > 0 && keyHistory[0] < threeSecsAgo) {
+                keyHistory.shift();
+            }
+            // Count keystrokes in last 3s
+            const charsInLast3s = keyHistory.length;
+            // WPM = (Chars / 5) / (3/60) = Chars / 5 * 20 = Chars * 4
+            const currentWpm = Math.round(charsInLast3s * 4);
+            statCurrent.innerText = currentWpm;
+        }
+
+        function resetStats() {
+            stopTimer();
+            startTime = null;
+            totalCorrectChars = 0;
+            keyHistory = [];
+            statTime.innerText = "00:00";
+            statAvg.innerText = "0";
+            statCurrent.innerText = "0";
         }
 
         // File Upload Listener
@@ -541,10 +647,8 @@
             const file = e.target.files[0];
             if (!file) return;
 
-            // 1. Show Loading UI
             loadingOverlay.style.display = 'flex';
 
-            // 2. Delay processing to allow UI to render loading state
             setTimeout(() => {
                 const reader = new FileReader();
                 reader.onload = (event) => {
@@ -552,47 +656,44 @@
                     
                     if (!rawText.trim()) {
                         alert("File content is empty!");
-                        loadingOverlay.style.display = 'none'; // Hide if empty
+                        loadingOverlay.style.display = 'none'; 
                         return;
                     }
 
-                    // Processing (heavy lifting potentially)
+                    // Reset Session
                     allLines = splitTextIntoLines(rawText);
                     currentLineIndex = 0;
                     targetText = allLines[0];
                     userInput = "";
                     
+                    resetStats(); // Reset stats on new file
+                    
                     document.activeElement.blur();
                     updateUI();
                     
-                    // 3. Hide Loading & Focus
                     loadingOverlay.style.display = 'none';
                     document.body.focus();
                 };
 
-                // Handle errors
                 reader.onerror = () => {
                     alert("Error reading file.");
                     loadingOverlay.style.display = 'none';
                 };
 
                 reader.readAsText(file);
-            }, 100); // 100ms delay to ensure spinner appears
+            }, 100); 
         });
 
         // Init
         function initGame() {
             initThemeControls();
-            // Default initial state
             allLines = [targetText];
             updateUI();
         }
 
         function updateUI() {
-            // Update the text display to show CURRENT line only
             targetRow.innerText = targetText;
 
-            // Render Input
             while(inputRow.firstChild && inputRow.firstChild !== cursor) {
                 inputRow.removeChild(inputRow.firstChild);
             }
@@ -611,10 +712,8 @@
                 inputRow.insertBefore(span, cursor);
             }
 
-            // Highlight Target Key
             document.querySelectorAll('.key-unit').forEach(k => k.classList.remove('target'));
             
-            // Highlight next character key
             if (userInput.length < targetText.length) {
                 const nextChar = targetText[userInput.length];
                 let targetCode = getKeyCode(nextChar);
@@ -647,7 +746,6 @@
 
         // --- 4. Event Listeners ---
         window.addEventListener('keydown', (e) => {
-            // FIX: Prevent space from activating focused buttons or scrolling
             if(e.key === 'Tab' || e.key === 'Backspace' || e.key === "'" || e.key === " ") {
                 e.preventDefault();
             }
@@ -661,27 +759,29 @@
                 });
             }
 
-            // Handle Backspace
             if (e.key === 'Backspace') {
                 if (userInput.length > 0) {
+                    // Remove last char from history to be accurate?
+                    // Usually we don't remove from stats history to reflect real effort,
+                    // but we do reduce the total count for Avg WPM.
                     userInput = userInput.slice(0, -1);
                     updateUI();
                 }
                 return;
             }
 
-            // IGNORE non-character keys (The Fix)
-            // This prevents "ArrowLeft", "Enter", "Escape" etc. from being printed as text
             if (e.key.length > 1) return;
 
-            // Modifiers check is mostly covered by length > 1, but keep specific ones if needed
-            // if (['Shift', 'Control', 'Alt', 'CapsLock', 'Meta'].includes(e.key)) return;
+            // Start timer on first valid input
+            if (!startTime) startTimer();
+
+            // Track keystroke for 3s WPM
+            keyHistory.push(Date.now());
 
             // Input Logic
             if (userInput.length < targetText.length) {
                 userInput += e.key;
                 
-                // Visual Error Feedback
                 const expected = targetText[userInput.length - 1];
                 if (e.key !== expected && keyEls.length > 0) {
                     keyEls.forEach(keyEl => {
@@ -692,15 +792,20 @@
 
                 // Check for Line Completion
                 if (userInput.length === targetText.length) {
-                    // Line finished! Move to next line automatically
+                    // Accumulate stats
+                    totalCorrectChars += userInput.length;
+
                     if (currentLineIndex < allLines.length - 1) {
                         currentLineIndex++;
                         targetText = allLines[currentLineIndex];
-                        userInput = ""; // Clear input for new line
+                        userInput = ""; 
                     } else {
-                        // End of file
-                        alert("Great job! Practice complete.");
-                        // Reset to start? Or stay?
+                        stopTimer();
+                        alert(`Practice Complete!\nTime: ${statTime.innerText}\nAvg Speed: ${statAvg.innerText} WPM`);
+                        
+                        // Reset but maybe keep stats visible? 
+                        // For now let's reset to start state
+                        resetStats();
                         currentLineIndex = 0;
                         targetText = allLines[0];
                         userInput = "";
@@ -711,7 +816,6 @@
             }
         });
 
-        // Start
         renderKeyboard();
         initGame();
 

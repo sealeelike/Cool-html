@@ -1,0 +1,1374 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>普通壁纸生成器（Liquid Glass）</title>
+
+  <!-- React (UMD) -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <!-- Tailwind (CDN) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&display=swap');
+    body { font-family: 'Noto Sans SC', system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background-color: #f3f4f6; }
+
+    /* 预览区域透明棋盘 */
+    .preview-container {
+      background-image:
+        linear-gradient(45deg, #d1d5db 25%, transparent 25%),
+        linear-gradient(-45deg, #d1d5db 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, #d1d5db 75%),
+        linear-gradient(-45deg, transparent 75%, #d1d5db 75%);
+      background-size: 20px 20px;
+      background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
+    }
+
+    input[type="range"] { accent-color: auto; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useEffect, useMemo, useRef, useState } = React;
+
+    // 默认底部内容（预置 2 栏）
+    const defaultBottomContents = [
+      "常用快捷键： \n复制： Ctrl + C\n粘贴： Ctrl + V\n剪切： Ctrl + X\n全选： Ctrl + A\n打开剪切版： Win + V\n截图： Win + Shift + S\n标签： Win + 。",
+      "使用电脑提醒： \n远离搜狗/360\n直接访问豆包xx软件的官网\n使用必应/豆包搜索引擎，不用搜狗/360/百度"
+    ];
+
+    // 默认分类名称
+    const defaultCategories = [
+      "系统工具",
+      "办公文具",
+      "沟通社交",
+      "学习知识"
+    ];
+
+    const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+
+    const ensureLen = (arr, len, fillFn) => {
+      const next = Array.isArray(arr) ? [...arr] : [];
+      while (next.length < len) next.push(fillFn(next.length));
+      next.length = len;
+      return next;
+    };
+
+    // 计算“按分数宽度”的一行布局：每格宽度 = W / denom
+    // - denom 范围：1~8（代表 1/1 ~ 1/8）
+    // - 若总宽超出画布，则按比例整体缩放到刚好塞下
+    const computeRow = (count, denomArr, totalW) => {
+      const denoms = ensureLen(denomArr, count, () => Math.max(1, Math.min(8, count)));
+      const rawWs = denoms.map(d => totalW / clamp(parseInt(d, 10) || 1, 1, 8));
+      const rawSum = rawWs.reduce((a, b) => a + b, 0);
+      const scale = rawSum > totalW ? (totalW / rawSum) : 1;
+      const ws = rawWs.map(w => w * scale);
+      const sumW = ws.reduce((a, b) => a + b, 0);
+      // 默认左对齐：剩余空间留在右侧（更像桌面图标/分区的排布方式）
+      const startX = 0;
+      const items = [];
+      let x = startX;
+      for (let i = 0; i < count; i++) {
+        items.push({ x, w: ws[i], denom: denoms[i] });
+        x += ws[i];
+      }
+      return { items, scale, rawSum, sumW };
+    };
+
+    const widthOptions = [1,2,3,4,5,6,7,8];
+    const fmtFrac = (d) => d === 1 ? "1/1（全宽）" : `1/${d}`;
+
+
+    // 玻璃滤镜（顶/底同构）：仅参数源不同
+    const GLASS_GAMMA = 0.96;
+
+    const GlassDefs = ({
+      prefix,
+      blur,
+      saturate,
+      shadowOpacity,
+      liquidFrequency,
+      liquidScale,
+      liquidSeed,
+      specularSurfaceScale,
+      specularExponent,
+    }) => (
+      <>
+        {/* 阴影 */}
+        <filter id={`${prefix}-shadow`} x="-40%" y="-40%" width="180%" height="180%">
+          <feDropShadow dx="0" dy="18" stdDeviation="18" floodColor="#000" floodOpacity={shadowOpacity} />
+          <feDropShadow dx="0" dy="4" stdDeviation="6" floodColor="#000" floodOpacity={shadowOpacity * 0.55} />
+        </filter>
+
+        {/* 背景磨砂（基础） */}
+        <filter id={`${prefix}-bg-basic`} x="-30%" y="-30%" width="160%" height="160%">
+          <feGaussianBlur stdDeviation={blur} result="blurred" />
+          <feColorMatrix in="blurred" type="saturate" values={saturate} result="sat" />
+          <feComponentTransfer in="sat">
+            <feFuncR type="gamma" amplitude="1" exponent={GLASS_GAMMA} offset="0" />
+            <feFuncG type="gamma" amplitude="1" exponent={GLASS_GAMMA} offset="0" />
+            <feFuncB type="gamma" amplitude="1" exponent={GLASS_GAMMA} offset="0" />
+          </feComponentTransfer>
+        </filter>
+
+        {/* 背景磨砂 + 折射（液态） */}
+        <filter id={`${prefix}-bg-liquid`} x="-40%" y="-40%" width="180%" height="180%" colorInterpolationFilters="sRGB">
+          <feTurbulence
+            type="fractalNoise"
+            baseFrequency={`${liquidFrequency} ${liquidFrequency}`}
+            numOctaves="2"
+            seed={liquidSeed}
+            result="noise"
+          />
+          <feGaussianBlur in="noise" stdDeviation="2" result="softNoise" />
+          <feDisplacementMap
+            in="SourceGraphic"
+            in2="softNoise"
+            scale={liquidScale}
+            xChannelSelector="R"
+            yChannelSelector="G"
+            result="displaced"
+          />
+          <feGaussianBlur in="displaced" stdDeviation={blur} result="blurred" />
+          <feColorMatrix in="blurred" type="saturate" values={saturate} result="sat" />
+          <feComponentTransfer in="sat">
+            <feFuncR type="gamma" amplitude="1" exponent={GLASS_GAMMA} offset="0" />
+            <feFuncG type="gamma" amplitude="1" exponent={GLASS_GAMMA} offset="0" />
+            <feFuncB type="gamma" amplitude="1" exponent={GLASS_GAMMA} offset="0" />
+          </feComponentTransfer>
+        </filter>
+
+        {/* 镜面高光（Pro） */}
+        <filter id={`${prefix}-specular`} x="-30%" y="-30%" width="160%" height="160%" colorInterpolationFilters="sRGB">
+          <feGaussianBlur in="SourceAlpha" stdDeviation="3" result="alphaBlur" />
+          <feSpecularLighting
+            in="alphaBlur"
+            surfaceScale={specularSurfaceScale}
+            specularConstant="1"
+            specularExponent={specularExponent}
+            lightingColor="white"
+            result="spec"
+          >
+            <fePointLight x="-200" y="-200" z="300" />
+          </feSpecularLighting>
+          <feComposite in="spec" in2="SourceAlpha" operator="in" result="specClipped" />
+          <feComponentTransfer in="specClipped" result="specOut">
+            <feFuncA type="table" tableValues="0 0.9" />
+          </feComponentTransfer>
+          <feMerge>
+            <feMergeNode in="specOut" />
+          </feMerge>
+        </filter>
+      </>
+    );
+    const App = () => {
+      const [config, setConfig] = useState({
+        width: 1920,
+        height: 1080,
+
+        // 背景层
+        bgColor: "#EDF1F4",
+        bgOpacity: 1,
+        bgImage: null,
+        // 图片透明度默认 100%
+        bgImageOpacity: 1,
+
+        // 任务栏预留
+        taskbarHeight: 60,
+
+        // 上部分类
+        categoryCount: 4,
+        categories: defaultCategories,
+        categoryWidthDivs: Array(4).fill(5),
+
+        // 下部提示
+        bottomCount: 2,
+        bottomContents: defaultBottomContents,
+        bottomWidthDivs: [5, 3],
+
+        // 全局
+        fontSizeMode: "large", // normal, large, extra
+
+        // ✅ 分类层风格
+        categoryStyle: "liquidPro", // glass | liquid | liquidPro | classic
+
+        // ✅ 顶部玻璃参数（可调）
+        glassBlur: 2,
+        glassSaturate: 1.6,
+        glassTintOpacity: 0.05,
+        glassHighlightOpacity: 0.10,
+        glassStrokeOpacity: 0.26,
+        glassShadowOpacity: 0.20,
+
+        liquidFrequency: 0.008,
+        liquidScale: 20,
+        liquidSeed: 92,
+
+        specularOpacity: 0.26,
+        specularSurfaceScale: 5,
+        specularExponent: 100,
+
+        // ✅ 分类标签字重（你想手动试试：步进 50）
+        labelFontWeight: 500,
+
+        // ✅ 底部小贴士：单独一套玻璃配置（与顶部分离）
+        tipsStyle: "liquidPro", // glass | liquid | liquidPro | classic
+
+        tipsBlur: 6,
+        tipsSaturate: 1.35,
+        tipsTintColor: "#000000",
+        tipsTintOpacity: 0.20,
+        tipsHighlightOpacity: 0.60,
+        tipsStrokeOpacity: 0.45,
+        tipsShadowOpacity: 0.22,
+
+        tipsLiquidFrequency: 0.010,
+        tipsLiquidScale: 40,
+        tipsLiquidSeed: 222,
+
+        tipsSpecularOpacity: 0.18,
+        tipsSpecularSurfaceScale: 4,
+        tipsSpecularExponent: 90,
+      });
+
+      const [zoom, setZoom] = useState(0.45);
+      const [fullPreview, setFullPreview] = useState(false);
+      const [fullPreviewUrl, setFullPreviewUrl] = useState(null);
+      const svgRef = useRef(null);
+
+      const buildSvgBlobUrl = () => {
+        const svg = svgRef.current;
+        if (!svg) return null;
+        const clonedSvg = svg.cloneNode(true);
+        clonedSvg.setAttribute("width", String(config.width));
+        clonedSvg.setAttribute("height", String(config.height));
+        clonedSvg.setAttribute("viewBox", `0 0 ${config.width} ${config.height}`);
+        const data = new XMLSerializer().serializeToString(clonedSvg);
+        const blob = new Blob([data], { type: "image/svg+xml;charset=utf-8" });
+        return URL.createObjectURL(blob);
+      };
+
+      const openFullPreview = () => {
+        const url = buildSvgBlobUrl();
+        if (!url) return;
+        setFullPreviewUrl(prev => {
+          if (prev) URL.revokeObjectURL(prev);
+          return url;
+        });
+        setFullPreview(true);
+      };
+
+      const closeFullPreview = () => {
+        setFullPreview(false);
+        setFullPreviewUrl(prev => {
+          if (prev) URL.revokeObjectURL(prev);
+          return null;
+        });
+      };
+
+      // 全屏预览：Esc 退出 + 禁止背景滚动
+      useEffect(() => {
+        if (!fullPreview) return;
+
+        const onKeyDown = (e) => {
+          if (e.key === "Escape") closeFullPreview();
+        };
+
+        window.addEventListener("keydown", onKeyDown);
+        const prevOverflow = document.body.style.overflow;
+        document.body.style.overflow = "hidden";
+
+        return () => {
+          window.removeEventListener("keydown", onKeyDown);
+          document.body.style.overflow = prevOverflow;
+        };
+      }, [fullPreview]);
+
+      // 图片上传
+      const handleImageUpload = (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (event) => setConfig(prev => ({ ...prev, bgImage: event.target.result }));
+        reader.readAsDataURL(file);
+      };
+
+      const setCategoryCount = (n) => {
+        setConfig(prev => {
+          const categories = ensureLen(prev.categories, n, (i) => `分类 ${i + 1}`);
+          const widthDivs = ensureLen(prev.categoryWidthDivs, n, () => clamp(n, 1, 8));
+          return { ...prev, categoryCount: n, categories, categoryWidthDivs: widthDivs };
+        });
+      };
+
+      const setBottomCount = (n) => {
+        setConfig(prev => {
+          const bottomContents = ensureLen(prev.bottomContents, n, (i) => i === 0 ? defaultBottomContents[0] : "");
+          const widthDivs = ensureLen(prev.bottomWidthDivs, n, () => clamp(n, 1, 8));
+          return { ...prev, bottomCount: n, bottomContents, bottomWidthDivs: widthDivs };
+        });
+      };
+
+      const updateCategoryName = (index, newName) => {
+        setConfig(prev => {
+          const next = [...prev.categories];
+          next[index] = newName;
+          return { ...prev, categories: next };
+        });
+      };
+
+      const updateCategoryWidth = (index, denom) => {
+        setConfig(prev => {
+          const next = [...prev.categoryWidthDivs];
+          next[index] = clamp(parseInt(denom, 10) || 1, 1, 8);
+          return { ...prev, categoryWidthDivs: next };
+        });
+      };
+
+      const updateBottomContent = (index, newContent) => {
+        setConfig(prev => {
+          const next = [...prev.bottomContents];
+          next[index] = newContent;
+          return { ...prev, bottomContents: next };
+        });
+      };
+
+      const updateBottomWidth = (index, denom) => {
+        setConfig(prev => {
+          const next = [...prev.bottomWidthDivs];
+          next[index] = clamp(parseInt(denom, 10) || 1, 1, 8);
+          return { ...prev, bottomWidthDivs: next };
+        });
+      };
+
+      // 下载 PNG（SVG -> Canvas）
+      const downloadPNG = () => {
+        const svg = svgRef.current;
+        if (!svg) return;
+        const canvas = document.createElement("canvas");
+        canvas.width = config.width;
+        canvas.height = config.height;
+        const ctx = canvas.getContext("2d");
+
+        // 导出时写死像素尺寸，避免 100% 导致低分辨率
+        const clonedSvg = svg.cloneNode(true);
+        clonedSvg.setAttribute("width", String(config.width));
+        clonedSvg.setAttribute("height", String(config.height));
+        clonedSvg.setAttribute("viewBox", `0 0 ${config.width} ${config.height}`);
+
+        const data = new XMLSerializer().serializeToString(clonedSvg);
+        const img = new Image();
+        const svgBlob = new Blob([data], { type: "image/svg+xml;charset=utf-8" });
+        const url = URL.createObjectURL(svgBlob);
+
+        img.onload = () => {
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = "high";
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          URL.revokeObjectURL(url);
+
+          canvas.toBlob((blob) => {
+            if (!blob) return;
+            const pngUrl = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.download = `wallpaper.png`;
+            a.href = pngUrl;
+            a.click();
+            URL.revokeObjectURL(pngUrl);
+          }, "image/png");
+        };
+        img.src = url;
+      };
+
+      // 下载 SVG
+      const downloadSVG = () => {
+        const svg = svgRef.current;
+        if (!svg) return;
+
+        const clonedSvg = svg.cloneNode(true);
+        clonedSvg.setAttribute("width", String(config.width));
+        clonedSvg.setAttribute("height", String(config.height));
+        clonedSvg.setAttribute("viewBox", `0 0 ${config.width} ${config.height}`);
+
+        const data = new XMLSerializer().serializeToString(clonedSvg);
+        const blob = new Blob([data], { type: "image/svg+xml;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.download = `wallpaper.svg`;
+        a.href = url;
+        a.click();
+      };
+
+      // --- 布局 ---
+      const layout = useMemo(() => {
+        const usableHeight = config.height - config.taskbarHeight;
+        const appAreaHeight = usableHeight * (2 / 3);
+        const tipsAreaHeight = usableHeight * (1 / 3);
+
+        const topRow = computeRow(config.categoryCount, config.categoryWidthDivs, config.width);
+        const bottomRow = computeRow(config.bottomCount, config.bottomWidthDivs, config.width);
+
+        const topBoxHeight = appAreaHeight;
+        const bottomBoxHeight = tipsAreaHeight - 20;
+
+        return { usableHeight, appAreaHeight, tipsAreaHeight, topRow, bottomRow, topBoxHeight, bottomBoxHeight };
+      }, [
+        config.width,
+        config.height,
+        config.taskbarHeight,
+        config.categoryCount,
+        config.bottomCount,
+        JSON.stringify(config.categoryWidthDivs),
+        JSON.stringify(config.bottomWidthDivs)
+      ]);
+
+      const { appAreaHeight, topRow, bottomRow, topBoxHeight, bottomBoxHeight } = layout;
+
+      const labelFont =
+        config.fontSizeMode === "extra" ? 34 :
+        config.fontSizeMode === "large" ? 28 : 24;
+
+      // 顶部卡片渲染
+      const renderTopCard = (i) => {
+        const item = topRow.items[i];
+        const x = item.x;
+        const w = item.w;
+        const y = 0;
+
+        // 让“高度/圆角”不随宽度变化：水平 padding 可随宽度变化，垂直 padding 固定（随高度变化）
+        const padX = clamp(w * 0.06, 18, 28);
+        const padY = clamp(topBoxHeight * 0.05, 18, 28);
+        const labelAreaH = clamp(topBoxHeight * 0.12, 60, 96);
+
+        const cardX = x + padX;
+        const cardY = y + padY;
+        const cardW = w - padX * 2;
+        const cardH = topBoxHeight - padY * 2 - labelAreaH;
+
+        // 圆角：默认按高度给一个统一值，并防止超过卡片尺寸的一半
+        const baseRx = clamp(topBoxHeight * 0.075, 24, 36);
+        const rx = Math.min(baseRx, cardW / 2, cardH / 2);
+
+        const title = config.categories[i] || `分类 ${i + 1}`;
+        const labelX = x + w / 2;
+        const labelY = cardY + cardH + labelAreaH / 2 + 2;
+
+        const clipId = `clip-top-${i}`;
+
+        const bgFilter =
+          config.categoryStyle === "glass" ? "glass-bg-basic" :
+          (config.categoryStyle === "liquid" || config.categoryStyle === "liquidPro") ? "glass-bg-liquid" :
+          null;
+
+        if (config.categoryStyle === "classic") {
+          return (
+            <g key={`top-${i}`}>
+              <rect
+                x={cardX}
+                y={cardY}
+                width={cardW}
+                height={cardH}
+                rx={rx}
+                fill="none"
+                stroke="#ffffff"
+                strokeWidth="2"
+                opacity="0.35"
+              />
+
+              <text
+                x={labelX}
+                y={labelY}
+                textAnchor="middle"
+                dominantBaseline="middle"
+                fontSize={labelFont}
+                fontWeight={config.labelFontWeight}
+                fill="#ffffff"
+                filter="url(#label-shadow)"
+                style={{ fontFamily: "Noto Sans SC, sans-serif" }}
+              >
+                {title}
+              </text>
+            </g>
+          );
+        }
+
+        return (
+          <g key={`top-${i}`}>
+            <clipPath id={clipId}>
+              <rect x={cardX} y={cardY} width={cardW} height={cardH} rx={rx} />
+            </clipPath>
+
+            {/* 外阴影 */}
+            <rect
+              x={cardX}
+              y={cardY}
+              width={cardW}
+              height={cardH}
+              rx={rx}
+              fill="#000"
+              opacity="0.001"
+              filter="url(#glass-shadow)"
+            />
+
+            <g clipPath={`url(#${clipId})`}>
+              {/* 背景副本 + 模糊/折射 */}
+              <g filter={`url(#${bgFilter})`}>
+                <use href="#wallpaper-bg" xlinkHref="#wallpaper-bg" />
+              </g>
+
+              {/* tint */}
+              <rect
+                x={cardX}
+                y={cardY}
+                width={cardW}
+                height={cardH}
+                rx={rx}
+                fill="#ffffff"
+                opacity={config.glassTintOpacity}
+              />
+
+              {/* highlight */}
+              <rect
+                x={cardX}
+                y={cardY}
+                width={cardW}
+                height={cardH}
+                rx={rx}
+                fill="url(#glass-highlight)"
+                opacity={config.glassHighlightOpacity}
+              />
+
+              {/* specular */}
+              {config.categoryStyle === "liquidPro" && (
+                <rect
+                  x={cardX}
+                  y={cardY}
+                  width={cardW}
+                  height={cardH}
+                  rx={rx}
+                  fill="#ffffff"
+                  opacity={config.specularOpacity}
+                  filter="url(#glass-specular)"
+                />
+              )}
+
+              {/* stroke */}
+              <rect
+                x={cardX}
+                y={cardY}
+                width={cardW}
+                height={cardH}
+                rx={rx}
+                fill="none"
+                stroke="url(#glass-stroke)"
+                strokeWidth="1.5"
+                opacity={config.glassStrokeOpacity}
+              />
+            </g>
+
+            {/* 标签：写在玻璃下方居中 */}
+            <text
+              x={labelX}
+              y={labelY}
+              textAnchor="middle"
+              dominantBaseline="middle"
+              fontSize={labelFont}
+              fontWeight={config.labelFontWeight}
+              fill="#ffffff"
+              filter="url(#label-shadow)"
+              style={{ fontFamily: "Noto Sans SC, sans-serif" }}
+            >
+              {title}
+            </text>
+          </g>
+        );
+      };
+
+      // 底部小贴士卡片（玻璃）
+      const renderBottomCell = (i) => {
+        const item = bottomRow.items[i];
+        const x = item.x;
+        const w = item.w;
+        const y = 20;
+
+        // 同上：水平 padding 可随宽度变化，垂直 padding 固定（随高度变化），避免不同宽度时高度参差
+        const padX = clamp(w * 0.06, 16, 26);
+        const padY = clamp(bottomBoxHeight * 0.08, 16, 26);
+        const cardX = x + padX;
+        const cardY = y + padY;
+        const cardW = w - padX * 2;
+        const cardH = bottomBoxHeight - padY * 2;
+
+        const baseRx = clamp(bottomBoxHeight * 0.18, 20, 32);
+        const rx = Math.min(baseRx, cardW / 2, cardH / 2);
+
+        const content = config.bottomContents[i] || "";
+        // 同时兼容：真实换行（回车）与手动输入的 "\\n" 转义符
+        const lines = String(content).split(/\r?\n|\\n/g);
+
+        const clipId = `clip-bottom-${i}`;
+
+        const bgFilter =
+          config.tipsStyle === "glass" ? "tips-bg-basic" :
+          (config.tipsStyle === "liquid" || config.tipsStyle === "liquidPro") ? "tips-bg-liquid" :
+          null;
+
+        // Classic：对照
+        if (config.tipsStyle === "classic") {
+          return (
+            <g key={`bottom-${i}`}>
+              <rect
+                x={cardX}
+                y={cardY}
+                width={cardW}
+                height={cardH}
+                rx={rx}
+                fill="none"
+                stroke="#ffffff"
+                strokeWidth="2"
+                opacity="0.28"
+              />
+              <clipPath id={clipId}>
+                <rect x={cardX} y={cardY} width={cardW} height={cardH} rx={rx} />
+              </clipPath>
+              <g clipPath={`url(#${clipId})`}>
+                {lines.map((line, idx) => (
+                  <text
+                    key={idx}
+                    x={cardX + clamp(cardW * 0.07, 22, 30)}
+                    y={cardY + 46 + idx * 30}
+                    fontSize="20"
+                    fill="#ffffff"
+                    fontWeight={idx === 0 ? "600" : "400"}
+                    opacity={idx === 0 ? 0.96 : 0.85}
+                    filter="url(#text-shadow)"
+                    style={{ fontFamily: "Noto Sans SC, sans-serif" }}
+                  >
+                    {line}
+                  </text>
+                ))}
+              </g>
+            </g>
+          );
+        }
+
+        return (
+          <g key={`bottom-${i}`}>
+            <clipPath id={clipId}>
+              <rect x={cardX} y={cardY} width={cardW} height={cardH} rx={rx} />
+            </clipPath>
+
+            {/* 外阴影 */}
+            <rect
+              x={cardX}
+              y={cardY}
+              width={cardW}
+              height={cardH}
+              rx={rx}
+              fill="#000"
+              opacity="0.001"
+              filter="url(#tips-shadow)"
+            />
+
+            <g clipPath={`url(#${clipId})`}>
+              {/* 背景副本 + 模糊/折射 */}
+              <g filter={`url(#${bgFilter})`}>
+                {/*
+                  关键：底部整块区域有 translate(0, appAreaHeight)。
+                  如果不把背景副本向上抵消 appAreaHeight，会导致“采样错位”，从而无法做到参数归零时的完全透明。
+                */}
+                <use href="#wallpaper-bg" xlinkHref="#wallpaper-bg" y={-appAreaHeight} />
+              </g>
+
+              {/* tint（可选颜色） */}
+              <rect
+                x={cardX}
+                y={cardY}
+                width={cardW}
+                height={cardH}
+                rx={rx}
+                fill={config.tipsTintColor}
+                opacity={config.tipsTintOpacity}
+              />
+
+              {/* highlight */}
+              <rect
+                x={cardX}
+                y={cardY}
+                width={cardW}
+                height={cardH}
+                rx={rx}
+                fill="url(#glass-highlight)"
+                opacity={config.tipsHighlightOpacity}
+              />
+
+              {/* specular */}
+              {config.tipsStyle === "liquidPro" && (
+                <rect
+                  x={cardX}
+                  y={cardY}
+                  width={cardW}
+                  height={cardH}
+                  rx={rx}
+                  fill="#ffffff"
+                  opacity={config.tipsSpecularOpacity}
+                  filter="url(#tips-specular)"
+                />
+              )}
+
+              {/* stroke */}
+              <rect
+                x={cardX}
+                y={cardY}
+                width={cardW}
+                height={cardH}
+                rx={rx}
+                fill="none"
+                stroke="url(#glass-stroke)"
+                strokeWidth="1.5"
+                opacity={config.tipsStrokeOpacity}
+              />
+
+              {/* 文本（白字黑阴影） */}
+              {lines.map((line, idx) => (
+                <text
+                  key={idx}
+                  x={cardX + clamp(cardW * 0.07, 22, 30)}
+                  y={cardY + 46 + idx * 30}
+                  fontSize="20"
+                  fill="#ffffff"
+                  fontWeight={idx === 0 ? "600" : "400"}
+                  opacity={idx === 0 ? 0.96 : 0.85}
+                  filter="url(#text-shadow)"
+                  style={{ fontFamily: "Noto Sans SC, sans-serif" }}
+                >
+                  {line}
+                </text>
+              ))}
+            </g>
+          </g>
+        );
+      };
+
+      // 统一 SVG（用于右侧画布 + 全屏预览）
+      const WallpaperSVG = ({ attachRef = false }) => (
+        <svg
+          ref={attachRef ? svgRef : null}
+          width="100%"
+          height="100%"
+          viewBox={`0 0 ${config.width} ${config.height}`}
+          preserveAspectRatio="xMidYMid meet"
+          xmlns="http://www.w3.org/2000/svg"
+          xmlnsXlink="http://www.w3.org/1999/xlink"
+        >
+          <defs>
+            {/* 玻璃滤镜：顶部与底部同构（仅参数源不同） */}
+            <GlassDefs
+              prefix="glass"
+              blur={config.glassBlur}
+              saturate={config.glassSaturate}
+              shadowOpacity={config.glassShadowOpacity}
+              liquidFrequency={config.liquidFrequency}
+              liquidScale={config.liquidScale}
+              liquidSeed={config.liquidSeed}
+              specularSurfaceScale={config.specularSurfaceScale}
+              specularExponent={config.specularExponent}
+            />
+            <GlassDefs
+              prefix="tips"
+              blur={config.tipsBlur}
+              saturate={config.tipsSaturate}
+              shadowOpacity={config.tipsShadowOpacity}
+              liquidFrequency={config.tipsLiquidFrequency}
+              liquidScale={config.tipsLiquidScale}
+              liquidSeed={config.tipsLiquidSeed}
+              specularSurfaceScale={config.tipsSpecularSurfaceScale}
+              specularExponent={config.tipsSpecularExponent}
+            />
+
+            {/* 分类名称阴影：白字 + 黑阴影（像桌面标签） */}
+            <filter id="label-shadow" x="-50%" y="-50%" width="200%" height="200%">
+              <feDropShadow dx="0" dy="2" stdDeviation="2.2" floodColor="#000" floodOpacity="0.85" />
+              <feDropShadow dx="0" dy="0" stdDeviation="1.2" floodColor="#000" floodOpacity="0.45" />
+            </filter>
+
+            {/* 小贴士文字阴影：稍微更柔一些 */}
+            <filter id="text-shadow" x="-50%" y="-50%" width="200%" height="200%">
+              <feDropShadow dx="0" dy="2" stdDeviation="2.2" floodColor="#000" floodOpacity="0.78" />
+              <feDropShadow dx="0" dy="0" stdDeviation="1.1" floodColor="#000" floodOpacity="0.40" />
+            </filter>
+{/* 高光渐变 */}
+            <radialGradient id="glass-highlight" cx="22%" cy="14%" r="85%">
+              <stop offset="0%" stopColor="#ffffff" stopOpacity="0.62" />
+              <stop offset="45%" stopColor="#ffffff" stopOpacity="0.14" />
+              <stop offset="100%" stopColor="#ffffff" stopOpacity="0" />
+            </radialGradient>
+
+            {/* 边缘渐变 */}
+            <linearGradient id="glass-stroke" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stopColor="#ffffff" stopOpacity="0.55" />
+              <stop offset="45%" stopColor="#ffffff" stopOpacity="0.18" />
+              <stop offset="100%" stopColor="#000000" stopOpacity="0.14" />
+            </linearGradient>
+          </defs>
+
+          {/* 背景组（供玻璃卡片 use 复用） */}
+          <g id="wallpaper-bg">
+            <rect width="100%" height="100%" fill={config.bgColor} fillOpacity={config.bgOpacity} />
+            {config.bgImage && (
+              <image
+                href={config.bgImage}
+                xlinkHref={config.bgImage}
+                width="100%"
+                height="100%"
+                preserveAspectRatio="xMidYMid slice"
+                opacity={config.bgImageOpacity}
+              />
+            )}
+          </g>
+
+          {/* 顶部：应用分类 */}
+          <g transform="translate(0, 0)">
+            {Array.from({ length: config.categoryCount }).map((_, i) => renderTopCard(i))}
+          </g>
+
+          {/* 底部：小贴士 */}
+          <g transform={`translate(0, ${appAreaHeight})`}>
+{Array.from({ length: config.bottomCount }).map((_, i) => renderBottomCell(i))}
+          </g>
+        </svg>
+      );
+
+      return (
+        <>
+        <div className="flex flex-col h-screen md:flex-row overflow-hidden">
+          {/* 左侧控制面板 */}
+          <div className="w-full md:w-1/3 lg:w-1/4 bg-white shadow-lg overflow-y-auto p-6 z-10 border-r border-gray-200">
+            <div className="mb-6">
+              <h1 className="text-2xl font-bold text-gray-800 flex items-center gap-2">
+                <span className="inline-flex items-center justify-center w-6 h-6 rounded bg-gray-100">🪟</span>
+                普通壁纸生成器（V2）
+              </h1>
+              <p className="text-sm text-gray-500 mt-1">顶部分类 + 底部小贴士：均为 SVG Liquid Glass（底部可独立调参）</p>
+            </div>
+
+            <div className="space-y-6">
+              {/* 1. 画布与底层 */}
+              <div className="bg-gray-50 p-4 rounded-lg border border-gray-100">
+                <h3 className="font-semibold text-gray-700 mb-3 flex items-center">
+                  <span className="w-6 h-6 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center mr-2 text-xs">1</span>
+                  画布与底层
+                </h3>
+
+                <div className="grid grid-cols-2 gap-2 mb-3">
+                  <label className="text-xs text-gray-600">宽度 (px)
+                    <input
+                      type="number"
+                      value={config.width}
+                      onChange={e => setConfig(prev => ({ ...prev, width: parseInt(e.target.value || "0", 10) }))}
+                      className="w-full mt-1 p-2 border rounded"
+                    />
+                  </label>
+                  <label className="text-xs text-gray-600">高度 (px)
+                    <input
+                      type="number"
+                      value={config.height}
+                      onChange={e => setConfig(prev => ({ ...prev, height: parseInt(e.target.value || "0", 10) }))}
+                      className="w-full mt-1 p-2 border rounded"
+                    />
+                  </label>
+                </div>
+
+                <div className="mb-3">
+                  <label className="text-xs text-gray-600 block mb-1">背景颜色</label>
+                  <div className="flex gap-2 items-center">
+                    <input
+                      type="color"
+                      value={config.bgColor}
+                      onChange={e => setConfig(prev => ({ ...prev, bgColor: e.target.value }))}
+                      className="h-8 w-16 cursor-pointer"
+                    />
+                    <input
+                      type="range"
+                      min="0"
+                      max="1"
+                      step="0.05"
+                      value={config.bgOpacity}
+                      onChange={e => setConfig(prev => ({ ...prev, bgOpacity: parseFloat(e.target.value) }))}
+                      className="flex-1"
+                    />
+                    <span className="text-xs font-mono text-gray-500 w-12 text-right">{Math.round(config.bgOpacity * 100)}%</span>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-xs text-gray-600 block mb-1">任务栏预留高度 (px)</label>
+                  <input
+                    type="number"
+                    value={config.taskbarHeight}
+                    onChange={e => setConfig(prev => ({ ...prev, taskbarHeight: parseInt(e.target.value || "0", 10) }))}
+                    className="w-full p-2 border rounded"
+                  />
+                </div>
+              </div>
+
+              {/* 2. 图片层 */}
+              <div className="bg-gray-50 p-4 rounded-lg border border-gray-100">
+                <h3 className="font-semibold text-gray-700 mb-3 flex items-center">
+                  <span className="w-6 h-6 rounded-full bg-green-100 text-green-600 flex items-center justify-center mr-2 text-xs">2</span>
+                  装饰图片层
+                </h3>
+
+                <div className="mb-3">
+                  <label className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-green-50 file:text-green-700 hover:file:bg-green-100 cursor-pointer">
+                    选择图片...
+                    <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
+                  </label>
+                </div>
+
+                {config.bgImage && (
+                  <div>
+                    <label className="text-xs text-gray-600 block mb-1">图片透明度</label>
+                    <div className="flex gap-2 items-center">
+                      <input
+                        type="range"
+                        min="0"
+                        max="1"
+                        step="0.05"
+                        value={config.bgImageOpacity}
+                        onChange={e => setConfig(prev => ({ ...prev, bgImageOpacity: parseFloat(e.target.value) }))}
+                        className="w-full"
+                      />
+                      <span className="text-xs font-mono text-gray-500 w-12 text-right">{Math.round(config.bgImageOpacity * 100)}%</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* 3. 顶部应用分类 */}
+              <div className="bg-gray-50 p-4 rounded-lg border border-gray-100">
+                <h3 className="font-semibold text-gray-700 mb-3 flex items-center">
+                  <span className="w-6 h-6 rounded-full bg-purple-100 text-purple-600 flex items-center justify-center mr-2 text-xs">3</span>
+                  顶部应用分类（玻璃）
+                </h3>
+
+                <div className="mb-4">
+                  <label className="text-xs text-gray-600 block mb-1">栏目数量: {config.categoryCount}</label>
+                  <input
+                    type="range"
+                    min="2"
+                    max="8"
+                    step="1"
+                    value={config.categoryCount}
+                    onChange={e => setCategoryCount(parseInt(e.target.value, 10))}
+                    className="w-full"
+                  />
+                </div>
+
+                <div className="mb-4">
+                  <label className="text-xs text-gray-600 block mb-1">分类层样式</label>
+                  <select
+                    value={config.categoryStyle}
+                    onChange={e => setConfig(prev => ({ ...prev, categoryStyle: e.target.value }))}
+                    className="w-full p-2 border rounded bg-white text-sm"
+                  >
+                    <option value="liquidPro">Liquid Glass Pro（折射 + 镜面高光）</option>
+                    <option value="liquid">Liquid Glass（折射 + 磨砂）</option>
+                    <option value="glass">Frosted Glass（纯磨砂玻璃）</option>
+                    <option value="classic">Classic（对照）</option>
+                  </select>
+                </div>
+
+                <div className="space-y-2 mb-2 max-h-56 overflow-y-auto pr-1">
+                  {Array.from({ length: config.categoryCount }).map((_, i) => (
+                    <div key={i} className="flex gap-2">
+                      <input
+                        type="text"
+                        value={config.categories[i] || ""}
+                        onChange={(e) => updateCategoryName(i, e.target.value)}
+                        className="flex-1 text-sm p-2 border rounded"
+                        placeholder={`分类 ${i + 1} 名称`}
+                      />
+                      <select
+                        value={config.categoryWidthDivs?.[i] ?? clamp(config.categoryCount, 1, 8)}
+                        onChange={e => updateCategoryWidth(i, e.target.value)}
+                        className="w-28 p-2 border rounded bg-white text-sm"
+                        title="该分类框占屏宽比例"
+                      >
+                        {widthOptions.map(d => (
+                          <option key={d} value={d}>{fmtFrac(d)}</option>
+                        ))}
+                      </select>
+                    </div>
+                  ))}
+                </div>
+
+                {/* 玻璃调参（默认展开） */}
+                <details className="mt-4" open>
+                  <summary className="cursor-pointer text-xs text-gray-600 select-none">高级调参（默认已展开）</summary>
+                  <div className="mt-3 space-y-3">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-xs text-gray-600 block mb-1">分类标签字重</label>
+                        <input
+                          type="number"
+                          min="100"
+                          max="900"
+                          step="50"
+                          value={config.labelFontWeight}
+                          onChange={e => setConfig(prev => ({ ...prev, labelFontWeight: clamp(parseInt(e.target.value || "500", 10), 100, 900) }))}
+                          className="w-full p-2 border rounded text-sm font-mono"
+                        />
+                        <p className="text-[11px] text-gray-500 mt-1">每步 50：例如 350/400/450/500…</p>
+                      </div>
+                      <div>
+                        <label className="text-xs text-gray-600 block mb-1">折射种子（seed）</label>
+                        <input
+                          type="number"
+                          min="0"
+                          max="9999"
+                          value={config.liquidSeed}
+                          onChange={e => setConfig(prev => ({ ...prev, liquidSeed: parseInt(e.target.value || "0", 10) }))}
+                          className="w-full p-2 border rounded text-sm font-mono"
+                        />
+                        <p className="text-[11px] text-gray-500 mt-1">换一个 seed，折射纹理会变</p>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="text-xs text-gray-600 block mb-1">磨砂模糊: {config.glassBlur}</label>
+                      <input type="range" min="0" max="26" step="1" value={config.glassBlur}
+                        onChange={e => setConfig(prev => ({ ...prev, glassBlur: parseInt(e.target.value, 10) }))}
+                        className="w-full"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-xs text-gray-600 block mb-1">白色染色: {Math.round(config.glassTintOpacity * 100)}%</label>
+                      <input type="range" min="0" max="0.55" step="0.01" value={config.glassTintOpacity}
+                        onChange={e => setConfig(prev => ({ ...prev, glassTintOpacity: parseFloat(e.target.value) }))}
+                        className="w-full"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-xs text-gray-600 block mb-1">高光强度: {Math.round(config.glassHighlightOpacity * 100)}%</label>
+                      <input type="range" min="0" max="1" step="0.02" value={config.glassHighlightOpacity}
+                        onChange={e => setConfig(prev => ({ ...prev, glassHighlightOpacity: parseFloat(e.target.value) }))}
+                        className="w-full"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-xs text-gray-600 block mb-1">边缘透明度: {Math.round(config.glassStrokeOpacity * 100)}%</label>
+                      <input type="range" min="0" max="1" step="0.02" value={config.glassStrokeOpacity}
+                        onChange={e => setConfig(prev => ({ ...prev, glassStrokeOpacity: parseFloat(e.target.value) }))}
+                        className="w-full"
+                      />
+                    </div>
+
+                    <div className="pt-2 border-t border-gray-200">
+                      <label className="text-xs text-gray-600 block mb-1">液态折射强度（scale）: {config.liquidScale}</label>
+                      <input type="range" min="0" max="150" step="1" value={config.liquidScale}
+                        onChange={e => setConfig(prev => ({ ...prev, liquidScale: parseInt(e.target.value, 10) }))}
+                        className="w-full"
+                      />
+                      <p className="text-[11px] text-gray-500 mt-1">太晃就往 12~25 降；想更明显就加大。</p>
+                    </div>
+
+                    <div>
+                      <label className="text-xs text-gray-600 block mb-1">折射纹理频率: {config.liquidFrequency}</label>
+                      <input type="range" min="0.005" max="0.03" step="0.001" value={config.liquidFrequency}
+                        onChange={e => setConfig(prev => ({ ...prev, liquidFrequency: parseFloat(e.target.value) }))}
+                        className="w-full"
+                      />
+                    </div>
+
+                    <div className="pt-2 border-t border-gray-200">
+                      <label className="text-xs text-gray-600 block mb-1">镜面高光（Pro）: {Math.round(config.specularOpacity * 100)}%</label>
+                      <input type="range" min="0" max="0.35" step="0.01" value={config.specularOpacity}
+                        onChange={e => setConfig(prev => ({ ...prev, specularOpacity: parseFloat(e.target.value) }))}
+                        className="w-full"
+                      />
+                    </div>
+                  </div>
+                </details>
+              </div>
+
+              {/* 4. 底部小贴士 */}
+              <div className="bg-gray-50 p-4 rounded-lg border border-gray-100">
+                <h3 className="font-semibold text-gray-700 mb-3 flex items-center">
+                  <span className="w-6 h-6 rounded-full bg-yellow-100 text-yellow-600 flex items-center justify-center mr-2 text-xs">4</span>
+                  底部小贴士（玻璃，可独立调参）
+                </h3>
+
+                <div className="mb-4">
+                  <label className="text-xs text-gray-600 block mb-1">栏目数量: {config.bottomCount}</label>
+                  <input
+                    type="range"
+                    min="1"
+                    max="8"
+                    step="1"
+                    value={config.bottomCount}
+                    onChange={e => setBottomCount(parseInt(e.target.value, 10))}
+                    className="w-full"
+                  />
+                </div>
+
+                <div className="mb-4">
+                  <label className="text-xs text-gray-600 block mb-1">小贴士样式</label>
+                  <select
+                    value={config.tipsStyle}
+                    onChange={e => setConfig(prev => ({ ...prev, tipsStyle: e.target.value }))}
+                    className="w-full p-2 border rounded bg-white text-sm"
+                  >
+                    <option value="liquidPro">Liquid Glass Pro</option>
+                    <option value="liquid">Liquid Glass</option>
+                    <option value="glass">Frosted Glass</option>
+                    <option value="classic">Classic（对照）</option>
+                  </select>
+                </div>
+
+                <div className="space-y-4 max-h-72 overflow-y-auto pr-1">
+                  {Array.from({ length: config.bottomCount }).map((_, i) => (
+                    <div key={i} className="border-b pb-3 last:border-0">
+                      <div className="flex items-center justify-between gap-2 mb-2">
+                        <div className="text-xs text-gray-500">小贴士 {i + 1}</div>
+                        <select
+                          value={config.bottomWidthDivs?.[i] ?? clamp(config.bottomCount, 1, 8)}
+                          onChange={e => updateBottomWidth(i, e.target.value)}
+                          className="w-28 p-2 border rounded bg-white text-sm"
+                          title="该小贴士框占屏宽比例"
+                        >
+                          {widthOptions.map(d => (
+                            <option key={d} value={d}>{fmtFrac(d)}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <textarea
+                        rows="3"
+                        value={config.bottomContents[i] || ""}
+                        onChange={e => updateBottomContent(i, e.target.value)}
+                        className="w-full p-2 text-sm border rounded resize-none"
+                        placeholder="第一行将作为标题..."
+                      />
+                    </div>
+                  ))}
+                </div>
+
+                {/* 小贴士玻璃调参（默认展开） */}
+                <details className="mt-4" open>
+                  <summary className="cursor-pointer text-xs text-gray-600 select-none">小贴士高级调参（默认已展开）</summary>
+                  <div className="mt-3 space-y-3">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-xs text-gray-600 block mb-1">Tint 颜色</label>
+                        <div className="flex gap-2 items-center">
+                          <input
+                            type="color"
+                            value={config.tipsTintColor}
+                            onChange={e => setConfig(prev => ({ ...prev, tipsTintColor: e.target.value }))}
+                            className="h-8 w-16 cursor-pointer"
+                          />
+                          <input
+                            type="text"
+                            value={config.tipsTintColor}
+                            onChange={e => setConfig(prev => ({ ...prev, tipsTintColor: e.target.value }))}
+                            className="flex-1 p-2 border rounded text-xs font-mono"
+                            placeholder="#000000"
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="text-xs text-gray-600 block mb-1">折射种子（seed）</label>
+                        <input
+                          type="number"
+                          min="0"
+                          max="9999"
+                          value={config.tipsLiquidSeed}
+                          onChange={e => setConfig(prev => ({ ...prev, tipsLiquidSeed: parseInt(e.target.value || "0", 10) }))}
+                          className="w-full p-2 border rounded text-sm font-mono"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="text-xs text-gray-600 block mb-1">磨砂模糊: {config.tipsBlur}</label>
+                      <input type="range" min="0" max="26" step="1" value={config.tipsBlur}
+                        onChange={e => setConfig(prev => ({ ...prev, tipsBlur: parseInt(e.target.value, 10) }))}
+                        className="w-full"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-xs text-gray-600 block mb-1">Tint 透明度: {Math.round(config.tipsTintOpacity * 100)}%</label>
+                      <input type="range" min="0" max="0.65" step="0.01" value={config.tipsTintOpacity}
+                        onChange={e => setConfig(prev => ({ ...prev, tipsTintOpacity: parseFloat(e.target.value) }))}
+                        className="w-full"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-xs text-gray-600 block mb-1">高光强度: {Math.round(config.tipsHighlightOpacity * 100)}%</label>
+                      <input type="range" min="0" max="1" step="0.02" value={config.tipsHighlightOpacity}
+                        onChange={e => setConfig(prev => ({ ...prev, tipsHighlightOpacity: parseFloat(e.target.value) }))}
+                        className="w-full"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-xs text-gray-600 block mb-1">边缘透明度: {Math.round(config.tipsStrokeOpacity * 100)}%</label>
+                      <input type="range" min="0" max="1" step="0.02" value={config.tipsStrokeOpacity}
+                        onChange={e => setConfig(prev => ({ ...prev, tipsStrokeOpacity: parseFloat(e.target.value) }))}
+                        className="w-full"
+                      />
+                    </div>
+
+                    <div className="pt-2 border-t border-gray-200">
+                      <label className="text-xs text-gray-600 block mb-1">液态折射强度（scale）: {config.tipsLiquidScale}</label>
+                      <input type="range" min="0" max="150" step="1" value={config.tipsLiquidScale}
+                        onChange={e => setConfig(prev => ({ ...prev, tipsLiquidScale: parseInt(e.target.value, 10) }))}
+                        className="w-full"
+                      />
+                      <p className="text-[11px] text-gray-500 mt-1">底部建议更克制：10~45 更耐看。</p>
+                    </div>
+
+                    <div>
+                      <label className="text-xs text-gray-600 block mb-1">折射纹理频率: {config.tipsLiquidFrequency}</label>
+                      <input type="range" min="0.005" max="0.03" step="0.001" value={config.tipsLiquidFrequency}
+                        onChange={e => setConfig(prev => ({ ...prev, tipsLiquidFrequency: parseFloat(e.target.value) }))}
+                        className="w-full"
+                      />
+                    </div>
+
+                    <div className="pt-2 border-t border-gray-200">
+                      <label className="text-xs text-gray-600 block mb-1">镜面高光（Pro）: {Math.round(config.tipsSpecularOpacity * 100)}%</label>
+                      <input type="range" min="0" max="0.35" step="0.01" value={config.tipsSpecularOpacity}
+                        onChange={e => setConfig(prev => ({ ...prev, tipsSpecularOpacity: parseFloat(e.target.value) }))}
+                        className="w-full"
+                      />
+                    </div>
+                  </div>
+                </details>
+              </div>
+
+              {/* 下载按钮 */}
+              <div className="flex gap-2 pt-2 pb-10">
+                <button
+                  onClick={downloadPNG}
+                  className="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-lg font-bold shadow transition"
+                >
+                  下载 PNG
+                </button>
+                <button
+                  onClick={downloadSVG}
+                  className="px-4 py-3 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-lg font-medium transition"
+                  title="下载矢量源文件"
+                >
+                  SVG
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* 右侧预览区域 */}
+          <div className="flex-1 bg-gray-200 overflow-auto flex flex-col items-center relative preview-container">
+            {/* 顶部悬浮条：居中缩放 + 右上角全屏（不放侧边栏） */}
+            <div className="sticky top-4 z-30 w-full px-4 mb-4">
+              <div className="grid grid-cols-[1fr_auto_1fr] items-center">
+                <div />
+
+                <div className="bg-white/90 backdrop-blur px-4 py-2 rounded-full shadow-md flex gap-4 items-center justify-center">
+                  <span className="text-xs font-bold text-gray-500">预览缩放</span>
+                  <input
+                    type="range"
+                    min="0.1"
+                    max="1"
+                    step="0.05"
+                    value={zoom}
+                    onChange={(e) => setZoom(parseFloat(e.target.value))}
+                    className="w-32 cursor-pointer"
+                  />
+                  <span className="text-xs font-mono text-gray-500 w-10">{Math.round(zoom * 100)}%</span>
+                </div>
+
+                <div className="flex justify-end">
+                  <button
+                    onClick={openFullPreview}
+                    className="bg-white/90 backdrop-blur px-3 py-2 rounded-lg shadow-md text-sm font-medium text-gray-700 hover:bg-white"
+                    title="全屏预览（Esc 退出）"
+                  >
+                    全屏预览
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div
+              style={{
+                width: config.width * zoom,
+                height: config.height * zoom,
+                boxShadow: "0 20px 50px rgba(0,0,0,0.2)",
+                marginBottom: "50px"
+              }}
+              className="bg-white shrink-0 transition-all duration-200"
+            >
+              <WallpaperSVG attachRef />
+            </div>
+
+            <div className="pb-12 text-xs text-gray-600">
+              提示：若你把多个框的“宽度分数”加起来超过 1，系统会自动按比例整体缩小，让它们仍能装进一行。
+            </div>
+          </div>
+        </div>
+
+        {/* 全屏预览层 */}
+        {fullPreview && (
+          <div
+            className="fixed inset-0 z-50 bg-black/85"
+            onClick={closeFullPreview}
+          >
+            <div className="absolute top-4 right-4 z-50 flex gap-2">
+              <button
+                onClick={(e) => { e.stopPropagation(); closeFullPreview(); }}
+                className="bg-white/90 backdrop-blur px-3 py-2 rounded-lg shadow-md text-sm font-medium text-gray-800 hover:bg-white"
+                title="退出（Esc）"
+              >
+                退出预览
+              </button>
+            </div>
+
+            <div
+              className="w-full h-full flex items-center justify-center p-4"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="w-[95vw] h-[95vh] bg-black/10 rounded-xl shadow-2xl overflow-hidden">
+                {fullPreviewUrl ? (
+                  <img
+                    src={fullPreviewUrl}
+                    alt="wallpaper preview"
+                    className="w-full h-full object-contain"
+                    draggable={false}
+                  />
+                ) : null}
+              </div>
+            </div>
+          </div>
+        )}
+
+        </>
+      );
+    };
+
+    const root = ReactDOM.createRoot(document.getElementById("root"));
+    root.render(<App />);
+  </script>
+</body>
+</html>
